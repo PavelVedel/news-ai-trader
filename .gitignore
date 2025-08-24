@@ -179,3 +179,14 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# SQLite
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Project specific
+logs/
+*.jsonl
+*.jsonl.*
+example_news.db

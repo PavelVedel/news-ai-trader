@@ -21,7 +21,7 @@ def test_stream_news_iter():
 
 
 def main():
-    test_fetch_news()
+    # test_fetch_news()
     test_stream_news_iter()
     # test_stream_news()
     

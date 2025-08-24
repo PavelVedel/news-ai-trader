@@ -18,9 +18,12 @@ WS_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
 
 
 def fetch_news(symbol="AAPL", limit=5):
-    """Простой REST-запрос новостей по тикеру"""
+    """Простой REST-запрос новостей по тикеру. Symbol может быть None."""
     headers = {"Apca-Api-Key-Id": ALPACA_KEY, "Apca-Api-Secret-Key": ALPACA_SECRET}
-    r = requests.get(REST_URL, params={"symbols": symbol, "limit": limit}, headers=headers, timeout=30)
+    params = {"limit": limit}
+    if symbol is not None:
+        params["symbols"] = symbol
+    r = requests.get(REST_URL, params=params, headers=headers, timeout=30)
     r.raise_for_status()
     items = r.json().get("news", [])
     for it in items:
