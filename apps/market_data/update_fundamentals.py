@@ -15,7 +15,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('fundamentals_update.log'),
+        logging.FileHandler('fundamentals_update.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -107,7 +107,7 @@ class FundamentalsUpdater:
                 'data_source': 'yahoo_finance'
             }
             
-            logger.info(f"✓ Успешно загружены данные для {symbol}")
+            logger.info(f"[OK] Успешно загружены данные для {symbol}")
             return fundamentals
             
         except Exception as e:
@@ -247,77 +247,102 @@ class FundamentalsUpdater:
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_cap)")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_pe_ratio ON fundamentals(pe_ratio)")
                     
-                    logger.info("✓ Таблица fundamentals создана успешно")
+                    logger.info("[OK] Таблица fundamentals создана успешно")
                 else:
-                    logger.info("✓ Таблица fundamentals уже существует")
+                    logger.info("[OK] Таблица fundamentals уже существует")
                     
         except Exception as e:
             logger.error(f"Ошибка при создании таблицы: {e}")
     
-    def update_all_fundamentals(self, delay_seconds: float = 0.1):
+    def update_all_fundamentals(self, delay_seconds: float = 0.1, max_symbols: int = None, max_age_months: int = 3):
         """
-        Обновить фундаментальные данные для всех символов
+        Обновить фундаментальные данные для символов, требующих обновления
         
         Args:
             delay_seconds: Задержка между запросами (для избежания блокировки)
+            max_symbols: Максимальное количество символов для обработки
+            max_age_months: Максимальный возраст данных в месяцах
         """
         try:
-            # Создаем таблицу если её нет
-            self.create_fundamentals_table()
-            
-            # Получаем все символы
-            symbols = self.get_all_symbols()
-            
-            if not symbols:
-                logger.error("Не удалось получить символы из базы данных")
+            # Убеждаемся что таблица fundamentals существует
+            if not self.db_connection.ensure_fundamentals_table():
+                logger.error("Не удалось создать таблицу fundamentals")
                 return
             
-            logger.info(f"Начинаю обновление фундаментальных данных для {len(symbols)} символов")
+            # Получаем символы, требующие обновления
+            symbols_to_update = self.db_connection.get_fundamentals_symbols_needing_update(max_age_months)
+            
+            if not symbols_to_update:
+                logger.info("Все символы имеют актуальные данные (не старше 3 месяцев)")
+                return
+            
+            # Ограничиваем количество символов если указан лимит
+            if max_symbols is not None:
+                symbols_to_update = symbols_to_update[:max_symbols]
+            
+            logger.info(f"Найдено {len(symbols_to_update)} символов, требующих обновления (возраст > {max_age_months} месяцев)")
+            logger.info(f"Обрабатываю {len(symbols_to_update)} символов (лимит: {max_symbols})")
             
             successful_updates = 0
             failed_updates = 0
             
-            for i, symbol in enumerate(symbols, 1):
+            for i, symbol in enumerate(symbols_to_update, 1):
                 try:
-                    logger.info(f"[{i}/{len(symbols)}] Обрабатываю {symbol}")
+                    logger.info(f"[{i}/{len(symbols_to_update)}] Обрабатываю {symbol}")
                     
                     # Получаем фундаментальные данные
                     fundamentals = self.get_fundamentals_for_symbol(symbol)
                     
                     if fundamentals:
-                        # Сохраняем в базу данных
-                        if self.save_fundamentals_to_db(fundamentals):
+                        # Сохраняем в базу данных используя метод из connection.py
+                        if self.db_connection.save_fundamentals(fundamentals):
                             successful_updates += 1
-                            logger.info(f"✓ {symbol} обновлен успешно")
+                            logger.info(f"[OK] {symbol} обновлен успешно")
                         else:
                             failed_updates += 1
-                            logger.error(f"✗ {symbol} - ошибка сохранения")
+                            logger.error(f"[ERROR] {symbol} - ошибка сохранения")
                     else:
                         failed_updates += 1
-                        logger.warning(f"✗ {symbol} - нет данных")
+                        logger.warning(f"[NO DATA] {symbol} - нет данных")
                     
                     # Задержка между запросами
-                    if i < len(symbols):  # Не ждем после последнего символа
+                    if i < len(symbols_to_update):  # Не ждем после последнего символа
                         time.sleep(delay_seconds)
                         
                 except Exception as e:
                     failed_updates += 1
-                    logger.error(f"✗ {symbol} - критическая ошибка: {e}")
+                    logger.error(f"[CRITICAL] {symbol} - критическая ошибка: {e}")
                     continue
             
             # Итоговая статистика
             logger.info("=" * 60)
             logger.info("ОБНОВЛЕНИЕ ЗАВЕРШЕНО")
             logger.info("=" * 60)
-            logger.info(f"Всего символов: {len(symbols)}")
+            logger.info(f"Всего символов: {len(symbols_to_update)}")
             logger.info(f"Успешно обновлено: {successful_updates}")
             logger.info(f"Ошибок: {failed_updates}")
-            logger.info(f"Процент успеха: {(successful_updates/len(symbols)*100):.1f}%")
+            logger.info(f"Процент успеха: {(successful_updates/len(symbols_to_update)*100):.1f}%")
+            
+            # Показываем статистику из базы данных
+            stats = self.db_connection.get_fundamentals_stats()
+            if stats:
+                logger.info(f"\nСТАТИСТИКА БАЗЫ ДАННЫХ:")
+                logger.info(f"Всего записей в fundamentals: {stats.get('total_symbols', 0)}")
+                logger.info(f"С сектором: {stats.get('symbols_with_sector', 0)}")
+                logger.info(f"С P/E: {stats.get('symbols_with_pe', 0)}")
+                logger.info(f"С рыночной капитализацией: {stats.get('symbols_with_market_cap', 0)}")
+                logger.info(f"Последнее обновление: {stats.get('last_update', 'N/A')}")
+                
+            # Показываем информацию об обновлении
+            logger.info(f"\nИНФОРМАЦИЯ ОБ ОБНОВЛЕНИИ:")
+            logger.info(f"Обновлялись только символы старше {max_age_months} месяцев")
+            logger.info(f"Следующий запуск обновит символы, которые станут старше {max_age_months} месяцев")
             
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
         finally:
             self.db_connection.close()
+
 
 def main():
     """Основная функция"""
@@ -329,8 +354,8 @@ def main():
         # Создаем обновлятель
         updater = FundamentalsUpdater()
         
-        # Запускаем обновление
-        updater.update_all_fundamentals()
+        # Запускаем обновление (только символы старше 3 месяцев, лимит 100)
+        updater.update_all_fundamentals(delay_seconds=0, max_symbols=None, max_age_months=3)
         
     except KeyboardInterrupt:
         print("\nОбновление прервано пользователем")
