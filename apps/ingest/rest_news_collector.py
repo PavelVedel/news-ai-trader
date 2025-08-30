@@ -1,13 +1,12 @@
 from libs.database.connection import DatabaseConnection
 from apps.ingest.alpaca_client.client import fetch_news
-import time
 from collections import deque
 
 NEWS_LIMIT_PER_REQUEST = 50 # 50 is max
-MAX_DONE = 1000
+MAX_DONE = 10000 # number of symbols for which reqest were performed
 
 def rest_news_connector(max_done:int = MAX_DONE):
-    db = DatabaseConnection("news.db")
+    db = DatabaseConnection("data/db/news.db")
     db.create_database()
 
     # Get initial news

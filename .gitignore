@@ -184,9 +184,15 @@ cython_debug/
 *.db-shm
 *.db-wal
 *.db-journal
+news.db
 
 # Project specific
 logs/
 *.jsonl
 *.jsonl.*
 example_news.db
+
+# Klines
+*.parquet
+anomaly_analysis_results.json
+

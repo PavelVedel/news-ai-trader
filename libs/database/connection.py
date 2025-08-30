@@ -215,3 +215,34 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении новостей за период: {e}")
             return []
+
+    def get_all_symbols(self) -> list[str]:
+        """
+        Получить все уникальные символы из базы данных
+        
+        Returns:
+            list[str]: Список уникальных символов (тикеров)
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT symbols_json FROM news_raw 
+                    WHERE symbols_json IS NOT NULL AND symbols_json != ''
+                """)
+                
+                all_symbols = set()
+                for row in cursor.fetchall():
+                    try:
+                        symbols = json.loads(row['symbols_json'])
+                        if isinstance(symbols, list):
+                            all_symbols.update(symbols)
+                    except (json.JSONDecodeError, TypeError):
+                        # Пропускаем некорректные JSON
+                        continue
+                
+                # Сортируем символы для удобства
+                return sorted(list(all_symbols))
+                
+        except Exception as e:
+            print(f"Ошибка при получении символов: {e}")
+            return []
