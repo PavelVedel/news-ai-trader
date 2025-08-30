@@ -214,3 +214,68 @@ CREATE INDEX IF NOT EXISTS idx_news_raw_source  ON news_raw(source);
 -- --   * labels_3h заполняй через 3 часа фоновым джобом (label_jobs)
 -- --   * buckets_daily заполняй сборкой счётчиков из labels_3h по ключу корзины
 -- -- ======================================================
+
+-- ======================================================
+-- 10) ФУНДАМЕНТАЛЬНЫЕ ДАННЫЕ С YAHOO FINANCE
+-- ======================================================
+CREATE TABLE IF NOT EXISTS fundamentals (
+  symbol              TEXT PRIMARY KEY,           -- Тикер акции (AAPL, MSFT, etc.)
+  
+  -- Основные финансовые показатели
+  market_cap          REAL,                       -- Рыночная капитализация
+  enterprise_value    REAL,                       -- Стоимость предприятия
+  pe_ratio            REAL,                       -- P/E коэффициент
+  forward_pe          REAL,                       -- Forward P/E
+  peg_ratio           REAL,                       -- PEG коэффициент
+  price_to_book       REAL,                       -- P/B коэффициент
+  price_to_sales      REAL,                       -- P/S коэффициент
+  enterprise_to_revenue REAL,                     -- EV/Revenue
+  enterprise_to_ebitda REAL,                      -- EV/EBITDA
+  
+  -- Показатели доходности
+  return_on_equity    REAL,                       -- ROE
+  return_on_assets    REAL,                       -- ROA
+  return_on_capital   REAL,                       -- ROC
+  
+  -- Показатели ликвидности
+  current_ratio       REAL,                       -- Текущий коэффициент
+  quick_ratio         REAL,                       -- Быстрый коэффициент
+  debt_to_equity      REAL,                       -- D/E коэффициент
+  
+  -- Дивиденды
+  dividend_yield      REAL,                       -- Дивидендная доходность
+  dividend_rate       REAL,                       -- Дивидендная ставка
+  payout_ratio        REAL,                       -- Коэффициент выплат
+  
+  -- Технические показатели
+  beta                REAL,                       -- Бета коэффициент
+  fifty_two_week_high REAL,                      -- 52-недельный максимум
+  fifty_two_week_low  REAL,                      -- 52-недельный минимум
+  fifty_day_average   REAL,                       -- 50-дневная средняя
+  two_hundred_day_average REAL,                   -- 200-дневная средняя
+  
+  -- Метаданные
+  sector              TEXT,                       -- Сектор
+  industry            TEXT,                       -- Отрасль
+  country             TEXT,                       -- Страна
+  currency            TEXT,                       -- Валюта
+  
+  -- Временные метки
+  last_updated        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- Когда обновляли
+  data_source         TEXT NOT NULL DEFAULT 'yahoo_finance'     -- Источник данных
+);
+
+-- Индексы для быстрого поиска
+CREATE INDEX IF NOT EXISTS idx_fundamentals_sector ON fundamentals(sector);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_industry ON fundamentals(industry);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_cap);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_pe_ratio ON fundamentals(pe_ratio);
+
+-- ======================================================
+-- ОБНОВЛЕНО: добавлена таблица fundamentals
+-- Подсказки:
+--   * вставляй свечи по событию в news_candles (до и после) с minute_offset
+--   * labels_3h заполняй через 3 часа фоновым джобом (label_jobs)
+--   * buckets_daily заполняй сборкой счётчиков из labels_3h по ключу корзины
+--   * fundamentals обновляй через update_fundamentals.py
+-- ======================================================

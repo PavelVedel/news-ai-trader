@@ -65,6 +65,10 @@ class DatabaseConnection:
             with self.get_cursor() as cursor:
                 cursor.executescript(schema_sql)   # ключевой момент
                 print("База данных создана успешно!")
+                
+                # Дополнительно создаем таблицу fundamentals если её нет
+                self.ensure_fundamentals_table()
+                
                 return True
                 
         except Exception as e:
@@ -246,3 +250,313 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении символов: {e}")
             return []
+    
+    def ensure_fundamentals_table(self) -> bool:
+        """
+        Убедиться что таблица fundamentals существует
+        
+        Returns:
+            bool: True если таблица создана/существует, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Проверяем, существует ли таблица
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='fundamentals'
+                """)
+                
+                if not cursor.fetchone():
+                    print("Создаю таблицу fundamentals...")
+                    
+                    # Создаем таблицу
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS fundamentals (
+                            symbol              TEXT PRIMARY KEY,
+                            market_cap          REAL,
+                            enterprise_value    REAL,
+                            pe_ratio            REAL,
+                            forward_pe          REAL,
+                            peg_ratio           REAL,
+                            price_to_book       REAL,
+                            price_to_sales      REAL,
+                            enterprise_to_revenue REAL,
+                            enterprise_to_ebitda REAL,
+                            return_on_equity    REAL,
+                            return_on_assets    REAL,
+                            return_on_capital   REAL,
+                            current_ratio       REAL,
+                            quick_ratio         REAL,
+                            debt_to_equity      REAL,
+                            dividend_yield      REAL,
+                            dividend_rate       REAL,
+                            payout_ratio        REAL,
+                            beta                REAL,
+                            fifty_two_week_high REAL,
+                            fifty_two_week_low  REAL,
+                            fifty_day_average   REAL,
+                            two_hundred_day_average REAL,
+                            sector              TEXT,
+                            industry            TEXT,
+                            country             TEXT,
+                            currency            TEXT,
+                            last_updated        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            data_source         TEXT NOT NULL DEFAULT 'yahoo_finance'
+                        )
+                    """)
+                    
+                    # Создаем индексы
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_sector ON fundamentals(sector)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_industry ON fundamentals(industry)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_cap)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_pe_ratio ON fundamentals(pe_ratio)")
+                    
+                    print("[OK] Таблица fundamentals создана успешно")
+                else:
+                    print("[OK] Таблица fundamentals уже существует")
+                
+                return True
+                    
+        except Exception as e:
+            print(f"Ошибка при создании таблицы fundamentals: {e}")
+            return False
+    
+    def save_fundamentals(self, fundamentals: dict) -> bool:
+        """
+        Сохранить фундаментальные данные в базу данных
+        
+        Args:
+            fundamentals: Словарь с фундаментальными данными
+            
+        Returns:
+            bool: True если успешно, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Подготавливаем SQL запрос для вставки/обновления
+                sql = """
+                    INSERT OR REPLACE INTO fundamentals (
+                        symbol, market_cap, enterprise_value, pe_ratio, forward_pe,
+                        peg_ratio, price_to_book, price_to_sales, enterprise_to_revenue,
+                        enterprise_to_ebitda, return_on_equity, return_on_assets,
+                        return_on_capital, current_ratio, quick_ratio, debt_to_equity,
+                        dividend_yield, dividend_rate, payout_ratio, beta,
+                        fifty_two_week_high, fifty_two_week_low, fifty_day_average,
+                        two_hundred_day_average, sector, industry, country, currency,
+                        last_updated, data_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                
+                # Подготавливаем значения для вставки
+                values = (
+                    fundamentals['symbol'],
+                    fundamentals['market_cap'],
+                    fundamentals['enterprise_value'],
+                    fundamentals['pe_ratio'],
+                    fundamentals['forward_pe'],
+                    fundamentals['peg_ratio'],
+                    fundamentals['price_to_book'],
+                    fundamentals['price_to_sales'],
+                    fundamentals['enterprise_to_revenue'],
+                    fundamentals['enterprise_to_ebitda'],
+                    fundamentals['return_on_equity'],
+                    fundamentals['return_on_assets'],
+                    fundamentals['return_on_capital'],
+                    fundamentals['current_ratio'],
+                    fundamentals['quick_ratio'],
+                    fundamentals['debt_to_equity'],
+                    fundamentals['dividend_yield'],
+                    fundamentals['dividend_rate'],
+                    fundamentals['payout_ratio'],
+                    fundamentals['beta'],
+                    fundamentals['fifty_two_week_high'],
+                    fundamentals['fifty_two_week_low'],
+                    fundamentals['fifty_day_average'],
+                    fundamentals['two_hundred_day_average'],
+                    fundamentals['sector'],
+                    fundamentals['industry'],
+                    fundamentals['country'],
+                    fundamentals['currency'],
+                    fundamentals['last_updated'],
+                    fundamentals['data_source']
+                )
+                
+                cursor.execute(sql, values)
+                return True
+                
+        except Exception as e:
+            print(f"Ошибка при сохранении данных для {fundamentals['symbol']}: {e}")
+            return False
+    
+    def get_fundamentals(self, symbol: str) -> Optional[dict]:
+        """
+        Получить фундаментальные данные для символа
+        
+        Args:
+            symbol: Тикер акции
+            
+        Returns:
+            dict: Словарь с фундаментальными данными или None если не найдено
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM fundamentals WHERE symbol = ?
+                """, (symbol,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+                
+        except Exception as e:
+            print(f"Ошибка при получении данных для {symbol}: {e}")
+            return None
+    
+    def get_all_fundamentals(self) -> list[dict]:
+        """
+        Получить все фундаментальные данные
+        
+        Returns:
+            list[dict]: Список всех записей fundamentals
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM fundamentals ORDER BY symbol
+                """)
+                
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            print(f"Ошибка при получении всех данных: {e}")
+            return []
+    
+    def delete_fundamentals(self, symbol: str) -> bool:
+        """
+        Удалить фундаментальные данные для символа
+        
+        Args:
+            symbol: Тикер акции
+            
+        Returns:
+            bool: True если успешно удалено, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    DELETE FROM fundamentals WHERE symbol = ?
+                """, (symbol,))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            print(f"Ошибка при удалении данных для {symbol}: {e}")
+            return False
+    
+    def get_fundamentals_symbols_needing_update(self, max_age_months: int = 3) -> list[str]:
+        """
+        Получить символы, которые требуют обновления fundamentals
+        
+        Args:
+            max_age_months: Максимальный возраст данных в месяцах
+            
+        Returns:
+            list[str]: Список символов для обновления
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Получаем все символы из news_raw
+                cursor.execute("""
+                    SELECT symbols_json FROM news_raw 
+                    WHERE symbols_json IS NOT NULL AND symbols_json != ''
+                """)
+                
+                all_symbols = set()
+                for row in cursor.fetchall():
+                    try:
+                        symbols = json.loads(row['symbols_json'])
+                        if isinstance(symbols, list):
+                            all_symbols.update(symbols)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                
+                # Получаем символы из fundamentals с датой последнего обновления
+                cursor.execute("""
+                    SELECT symbol, last_updated FROM fundamentals
+                """)
+                
+                existing_fundamentals = {}
+                for row in cursor.fetchall():
+                    existing_fundamentals[row['symbol']] = row['last_updated']
+                
+                # Определяем символы, требующие обновления
+                symbols_to_update = []
+                cutoff_date = datetime.now().replace(day=1)  # Текущий месяц
+                
+                for i in range(max_age_months):
+                    cutoff_date = cutoff_date.replace(month=cutoff_date.month - 1)
+                
+                cutoff_date_str = cutoff_date.isoformat()
+                
+                for symbol in all_symbols:
+                    clean_symbol = symbol.replace('$', '')
+                    if not clean_symbol or len(clean_symbol) > 10:
+                        continue
+                        
+                    if clean_symbol not in existing_fundamentals:
+                        # Новый символ - добавляем в список обновления
+                        symbols_to_update.append(clean_symbol)
+                    else:
+                        # Проверяем возраст существующих данных
+                        last_updated = existing_fundamentals[clean_symbol]
+                        if last_updated < cutoff_date_str:
+                            symbols_to_update.append(clean_symbol)
+                
+                return sorted(symbols_to_update)
+                
+        except Exception as e:
+            print(f"Ошибка при получении символов для обновления: {e}")
+            return []
+    
+    def get_fundamentals_stats(self) -> dict:
+        """
+        Получить статистику по таблице fundamentals
+        
+        Returns:
+            dict: Словарь со статистикой
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Общее количество символов
+                cursor.execute("SELECT COUNT(*) FROM fundamentals")
+                total_symbols = cursor.fetchone()[0]
+                
+                # Количество символов с сектором
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE sector IS NOT NULL")
+                symbols_with_sector = cursor.fetchone()[0]
+                
+                # Количество символов с P/E
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE pe_ratio IS NOT NULL")
+                symbols_with_pe = cursor.fetchone()[0]
+                
+                # Количество символов с рыночной капитализацией
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE market_cap IS NOT NULL")
+                symbols_with_market_cap = cursor.fetchone()[0]
+                
+                # Последнее обновление
+                cursor.execute("SELECT MAX(last_updated) FROM fundamentals")
+                last_update = cursor.fetchone()[0]
+                
+                return {
+                    'total_symbols': total_symbols,
+                    'symbols_with_sector': symbols_with_sector,
+                    'symbols_with_pe': symbols_with_pe,
+                    'symbols_with_market_cap': symbols_with_market_cap,
+                    'last_update': last_update
+                }
+                
+        except Exception as e:
+            print(f"Ошибка при получении статистики: {e}")
+            return {}
