@@ -560,3 +560,163 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении статистики: {e}")
             return {}
+
+    # ======= infos (ticker.info) =======
+    def ensure_infos_table(self) -> bool:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS infos (
+                      symbol                 TEXT PRIMARY KEY,
+                      long_name              TEXT,
+                      short_name             TEXT,
+                      display_name           TEXT,
+                      website                TEXT,
+                      ir_website             TEXT,
+                      phone                  TEXT,
+                      address1               TEXT,
+                      city                   TEXT,
+                      state                  TEXT,
+                      zip                    TEXT,
+                      country                TEXT,
+                      sector                 TEXT,
+                      industry               TEXT,
+                      full_time_employees    INTEGER,
+                      long_business_summary  TEXT,
+                      exchange               TEXT,
+                      currency               TEXT,
+                      officers_json          TEXT,
+                      raw_info_json          TEXT,
+                      last_updated           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      data_source            TEXT NOT NULL DEFAULT 'yahoo_finance'
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_infos_sector ON infos(sector)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_infos_industry ON infos(industry)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_infos_country ON infos(country)")
+            return True
+        except Exception as e:
+            print(f"Ошибка при создании таблицы infos: {e}")
+            return False
+
+    def save_infos(self, payload: dict) -> bool:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO infos (
+                      symbol, long_name, short_name, display_name,
+                      website, ir_website, phone,
+                      address1, city, state, zip, country,
+                      sector, industry,
+                      full_time_employees, long_business_summary,
+                      exchange, currency,
+                      officers_json, raw_info_json,
+                      last_updated, data_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload.get('symbol'),
+                        payload.get('long_name'),
+                        payload.get('short_name'),
+                        payload.get('display_name'),
+                        payload.get('website'),
+                        payload.get('ir_website'),
+                        payload.get('phone'),
+                        payload.get('address1'),
+                        payload.get('city'),
+                        payload.get('state'),
+                        payload.get('zip'),
+                        payload.get('country'),
+                        payload.get('sector'),
+                        payload.get('industry'),
+                        payload.get('full_time_employees'),
+                        payload.get('long_business_summary'),
+                        payload.get('exchange'),
+                        payload.get('currency'),
+                        payload.get('officers_json'),
+                        payload.get('raw_info_json'),
+                        payload.get('last_updated'),
+                        payload.get('data_source', 'yahoo_finance'),
+                    ),
+                )
+            return True
+        except Exception as e:
+            print(f"Ошибка при сохранении infos для {payload.get('symbol')}: {e}")
+            return False
+
+    def get_infos(self, symbol: str) -> Optional[dict]:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT * FROM infos WHERE symbol = ?", (symbol,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            print(f"Ошибка при получении infos для {symbol}: {e}")
+            return None
+
+    def get_all_infos(self) -> list[dict]:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT * FROM infos ORDER BY symbol")
+                return [dict(r) for r in cursor.fetchall()]
+        except Exception as e:
+            print(f"Ошибка при получении всех infos: {e}")
+            return []
+
+    def delete_infos(self, symbol: str) -> bool:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("DELETE FROM infos WHERE symbol = ?", (symbol,))
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Ошибка при удалении infos для {symbol}: {e}")
+            return False
+
+    def get_infos_symbols_needing_update(self, candidates: list[str], max_age_days: int = 30) -> list[str]:
+        """Вернуть подмножество candidates, которые отсутствуют в infos или устарели."""
+        try:
+            if not candidates:
+                return []
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT symbol, last_updated FROM infos")
+                existing = {row['symbol']: row['last_updated'] for row in cursor.fetchall()}
+
+            cutoff = datetime.now().timestamp() - max_age_days * 86400
+
+            def needs(sym: str) -> bool:
+                lu = existing.get(sym)
+                if not lu:
+                    return True
+                # Пытаемся парсить ISO8601
+                try:
+                    from datetime import datetime
+                    ts = datetime.fromisoformat(lu).timestamp()
+                    return ts < cutoff
+                except Exception:
+                    return True
+
+            return [s for s in candidates if needs(s)]
+        except Exception as e:
+            print(f"Ошибка при вычислении символов для обновления infos: {e}")
+            return candidates
+
+    def get_infos_stats(self) -> dict:
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM infos")
+                total = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM infos WHERE sector IS NOT NULL AND sector != ''")
+                with_sector = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM infos WHERE industry IS NOT NULL AND industry != ''")
+                with_industry = cursor.fetchone()[0]
+                cursor.execute("SELECT MAX(last_updated) FROM infos")
+                last_update = cursor.fetchone()[0]
+            return {
+                'total': total,
+                'with_sector': with_sector,
+                'with_industry': with_industry,
+                'last_update': last_update,
+            }
+        except Exception as e:
+            return {'error': str(e)}

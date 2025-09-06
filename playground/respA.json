@@ -1,0 +1,106 @@
+{
+    "news_id": "9",
+    "published_at": null,
+    "headline": "Bill Ackman Invests $1.27 Billion in Amazon, Adds To Google and More",
+    "symbols_input": ["AMZN", "CP", "GOOGL", "HLT", "HTZ"],
+    "actors": [
+      {
+        "name": "Bill Ackman",
+        "type": "person",
+        "role": "acquirer",
+        "org_hint_from_text": null,
+        "mentions": [
+          {
+            "text": "Bill Ackman",
+            "start": 0,
+            "end": 10
+          }
+        ],
+        "needs_grounding": true
+      },
+      {
+        "name": "Amazon",
+        "type": "org",
+        "role": "target",
+        "org_hint_from_text": null,
+        "mentions": [
+          {
+            "text": "Amazon",
+            "start": 55,
+            "end": 61
+          }
+        ],
+        "needs_grounding": true
+      },
+      {
+        "name": "Google",
+        "type": "org",
+        "role": "target",
+        "org_hint_from_text": null,
+        "mentions": [
+          {
+            "text": "Google",
+            "start": 87,
+            "end": 93
+          }
+        ],
+        "needs_grounding": true
+      }
+    ],
+    "event": {
+      "type": "stake_change",
+      "actions": [
+        "invests",
+        "added"
+      ],
+      "quants": [
+        {
+          "metric": "deal_value_usd",
+          "value": "1.27",
+          "unit": "billion",
+          "qualifier": null
+        }
+      ],
+      "evidence_spans": [
+        {
+          "text": "$1.27 billion",
+          "start": 51,
+          "end": 64
+        }
+      ]
+    },
+    "symbol_mentions_in_text": [
+      {
+        "symbol": "AMZN",
+        "surface": "Amazon",
+        "where": "body",
+        "offset": {
+          "start": 55,
+          "end": 61
+        }
+      },
+      {
+        "symbol": "GOOGL",
+        "surface": "Google",
+        "where": "body",
+        "offset": {
+          "start": 87,
+          "end": 93
+        }
+      }
+    ],
+    "unresolved_entities": [
+      {
+        "name": "Bill Ackman",
+        "reason": "no_explicit_ticker_in_text"
+      },
+      {
+        "name": "Amazon",
+        "reason": "no_explicit_ticker_in_text"
+      },
+      {
+        "name": "Google",
+        "reason": "no_explicit_ticker_in_text"
+      }
+    ]
+  }

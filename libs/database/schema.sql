@@ -272,10 +272,49 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_ca
 CREATE INDEX IF NOT EXISTS idx_fundamentals_pe_ratio ON fundamentals(pe_ratio);
 
 -- ======================================================
--- ОБНОВЛЕНО: добавлена таблица fundamentals
--- Подсказки:
---   * вставляй свечи по событию в news_candles (до и после) с minute_offset
---   * labels_3h заполняй через 3 часа фоновым джобом (label_jobs)
---   * buckets_daily заполняй сборкой счётчиков из labels_3h по ключу корзины
---   * fundamentals обновляй через update_fundamentals.py
+-- 11) ОБЩАЯ ИНФОРМАЦИЯ О КОМПАНИИ (Yahoo Finance: ticker.info)
 -- ======================================================
+CREATE TABLE IF NOT EXISTS infos (
+  symbol                 TEXT PRIMARY KEY,
+
+  -- имена/наименования
+  long_name              TEXT,
+  short_name             TEXT,
+  display_name           TEXT,
+
+  -- сайт/IR/контакты
+  website                TEXT,
+  ir_website             TEXT,
+  phone                  TEXT,
+
+  -- адрес
+  address1               TEXT,
+  city                   TEXT,
+  state                  TEXT,
+  zip                    TEXT,
+  country                TEXT,
+
+  -- отрасль/сектор
+  sector                 TEXT,
+  industry               TEXT,
+
+  -- персонал и описание
+  full_time_employees    INTEGER,
+  long_business_summary  TEXT,
+
+  -- биржа/валюта
+  exchange               TEXT,
+  currency               TEXT,
+
+  -- ключевые лица (упрощённо: name/title) и полный сырой JSON
+  officers_json          TEXT,    -- JSON-массив [{name, title}, ...]
+  raw_info_json          TEXT,    -- Полный JSON из ticker.info
+
+  -- служебные поля
+  last_updated           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  data_source            TEXT NOT NULL DEFAULT 'yahoo_finance'
+);
+
+CREATE INDEX IF NOT EXISTS idx_infos_sector ON infos(sector);
+CREATE INDEX IF NOT EXISTS idx_infos_industry ON infos(industry);
+CREATE INDEX IF NOT EXISTS idx_infos_country ON infos(country);
