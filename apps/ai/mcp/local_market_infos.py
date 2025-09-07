@@ -15,7 +15,7 @@ mcp = FastMCP(name="LocalMarketInfos")
     ),
     tags={"catalog", "search"},      # Optional tags for organization/filtering
 )
-def find_symbol_infos(symbol: str, filelds: list[Literal['symbol', 'long_name', 'short_name', 'display_name', 'website', 'ir_website', 'phone', 'address1', 'city', 'state', 'zip', 'country', 'sector', 'industry', 'full_time_employees', 'long_business_summary', 'exchange', 'currency', 'officers_json', 'raw_info_json', 'last_updated', 'data_source']] = None) -> dict[str, Any]:
+def find_symbol_infos(symbol: str, fields: list[Literal['symbol', 'long_name', 'short_name', 'display_name', 'website', 'ir_website', 'phone', 'address1', 'city', 'state', 'zip', 'country', 'sector', 'industry', 'full_time_employees', 'long_business_summary', 'exchange', 'currency', 'officers_json', 'raw_info_json', 'last_updated', 'data_source']] = None) -> dict[str, Any]:
     """Internal function description (ignored if description is provided above)."""
     # ['symbol', 'long_name', 'short_name', 'display_name', 'website', 'ir_website', 'phone', 'address1', 'city', 'state', 'zip', 'country', 'sector', 'industry', 'full_time_employees', 'long_business_summary', 'exchange', 'currency', 'officers_json', 'raw_info_json', 'last_updated', 'data_source']
     # Implementation...
@@ -29,11 +29,11 @@ def find_symbol_infos(symbol: str, filelds: list[Literal['symbol', 'long_name', 
     if infos is None:
         return {"error": "Symbol not found", "db_location": str(db_path), "mcp_folder": str(script_folder)}
     else:
-        if filelds is None:
+        if fields is None:
             return infos
         else:
             # maybe not all fields are present
-            return {field: infos.get(field, None) for field in filelds}
+            return {field: infos.get(field, None) for field in fields}
 
 
 
