@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 
 class DatabaseConnection:
-    def __init__(self, db_path: str = "news_trader.db"):
+    def __init__(self, db_path: str = "data/db/news.db"):
         self.db_path = db_path
         self._connection: Optional[sqlite3.Connection] = None
         
@@ -68,6 +68,8 @@ class DatabaseConnection:
                 
                 # Дополнительно создаем таблицу fundamentals если её нет
                 self.ensure_fundamentals_table()
+                # and info table
+                self.ensure_infos_table()
                 
                 return True
                 
@@ -192,6 +194,22 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении новостей по символу {symbol}: {e}")
             return []
+    
+    def get_news_by_id(self, news_id: int) -> dict:
+        """
+        Получить новость по ID
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM news_raw WHERE news_id = ?
+                """, (news_id,))
+                
+                return cursor.fetchone()
+                
+        except Exception as e:
+            print(f"Ошибка при получении новости по ID {news_id}: {e}")
+            return None
     
     def get_news_by_date_range(self, start_date: str, end_date: str, limit: int = 1000) -> list:
         """
@@ -720,3 +738,20 @@ class DatabaseConnection:
             }
         except Exception as e:
             return {'error': str(e)}
+
+    def get_news_and_infos_for_ai(self, news_id: int) -> dict:
+        """
+        Получить новость и информацию о символах для AI
+        """
+        news = self.get_news_by_id(news_id)
+        # news_list = db.get_news_by_symbol(symbol="AAPL", limit=1)
+        out_dict: dict[str, dict] = {}
+        news_dict = dict(news)
+        out_dict['news'] = news_dict
+
+        symbols = json.loads(news['symbols_json'])
+        symbol_info_dict: dict[str, dict] = {}
+        for symbol in symbols:
+            symbol_info_dict[symbol] = self.get_infos(symbol)
+        out_dict['symbol_info'] = symbol_info_dict
+        return out_dict
