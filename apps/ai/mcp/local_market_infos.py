@@ -10,8 +10,10 @@ mcp = FastMCP(name="LocalMarketInfos")
     name="find_symbol_infos",           # Custom tool name for the LLM
     description=(
         "Fetch symbol info from the local DB. Use 'fields' to limit output and save tokens "
-        "(e.g., ['symbol','long_name','sector','industry','website','officers_json',"
-        "'last_updated','data_source']); if omitted, returns all."
+        "(e.g., ['symbol', 'long_name', 'short_name', 'display_name', 'website', 'ir_website', "
+        "'phone', 'address1', 'city', 'state', 'zip', 'country', 'sector', 'industry', "
+        "'full_time_employees', 'long_business_summary', 'exchange', 'currency', "
+        "'officers_json', 'raw_info_json', 'last_updated', 'data_source']); if omitted, returns all."
     ),
     tags={"catalog", "search"},      # Optional tags for organization/filtering
 )
@@ -41,15 +43,22 @@ def find_symbol_infos(symbol: str, fields: list[Literal['symbol', 'long_name', '
     name="find_raw_news",
     description=(
         "Return raw news for a given symbol. If start_date and end_date are provided (ISO8601), "
-        "returns news within that date range for the symbol. You can pass 'limit' to cap results; "
+        "returns news within that date range for the symbol. You can pass 'limit' (string) to cap results; "
         "omit or set limit<=0 to return all in the range. Otherwise, returns the latest 'limit' news "
         "for the symbol (defaults to 10 if not provided). Set only_headlines=True to return only "
-        "news_id and headline for each item (use for brief overview)."
+        "news_id, date, and headline for each item (use for brief overview). "
+        "Date can be used to detect if all news were extracted during required period."
+        "For detailed response set bigger limits."
     ),
     tags={"catalog", "search"},
 )
-def find_raw_news(symbol: str, start_date: str = "", end_date: str = "", limit: int | None = None, only_headlines: bool = False) -> dict[str, Any]:
+def find_raw_news(symbol: str, start_date: str = "", end_date: str = "", limit: str | None = None, only_headlines: bool = False) -> dict[str, Any]:
     """Fetch raw news from local DB for a symbol, optionally within a time range."""
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"limit must be None or a string that can be converted to int, got: {limit}") from e
     script_folder = Path(__file__).parent
     db_path = (script_folder / ".." / ".." / ".." / "data" / "db" / "news.db").resolve()
     db = DatabaseConnection(db_path)
@@ -89,7 +98,7 @@ def find_raw_news(symbol: str, start_date: str = "", end_date: str = "", limit: 
             selected = filtered
         items_full = rows_to_dicts(selected)
         items = (
-            [{"news_id": it.get("news_id"), "headline": it.get("headline") } for it in items_full]
+            [{"news_id": it.get("news_id"), "created_at_utc": it.get("created_at_utc"), "headline": it.get("headline") } for it in items_full]
             if only_headlines else items_full
         )
         return {
