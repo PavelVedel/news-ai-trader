@@ -59,7 +59,7 @@ class FundamentalsUpdater:
                 logger.warning(f"Нет данных для {symbol}")
                 return None
             
-            # Извлекаем нужные поля
+            # Извлекаем все доступные поля из Yahoo Finance
             fundamentals = {
                 'symbol': symbol,
                 
@@ -88,6 +88,9 @@ class FundamentalsUpdater:
                 'dividend_yield': self._safe_get(info, 'dividendYield'),
                 'dividend_rate': self._safe_get(info, 'dividendRate'),
                 'payout_ratio': self._safe_get(info, 'payoutRatio'),
+                'five_year_avg_dividend_yield': self._safe_get(info, 'fiveYearAvgDividendYield'),
+                'trailing_annual_dividend_rate': self._safe_get(info, 'trailingAnnualDividendRate'),
+                'trailing_annual_dividend_yield': self._safe_get(info, 'trailingAnnualDividendYield'),
                 
                 # Технические показатели
                 'beta': self._safe_get(info, 'beta'),
@@ -95,12 +98,87 @@ class FundamentalsUpdater:
                 'fifty_two_week_low': self._safe_get(info, 'fiftyTwoWeekLow'),
                 'fifty_day_average': self._safe_get(info, 'fiftyDayAverage'),
                 'two_hundred_day_average': self._safe_get(info, 'twoHundredDayAverage'),
+                'fifty_two_week_change_percent': self._safe_get(info, 'fiftyTwoWeekChangePercent'),
+                'fifty_day_average_change': self._safe_get(info, 'fiftyDayAverageChange'),
+                'fifty_day_average_change_percent': self._safe_get(info, 'fiftyDayAverageChangePercent'),
+                'two_hundred_day_average_change': self._safe_get(info, 'twoHundredDayAverageChange'),
+                'two_hundred_day_average_change_percent': self._safe_get(info, 'twoHundredDayAverageChangePercent'),
+                
+                # Дополнительные финансовые показатели
+                'book_value': self._safe_get(info, 'bookValue'),
+                'total_cash': self._safe_get(info, 'totalCash'),
+                'total_cash_per_share': self._safe_get(info, 'totalCashPerShare'),
+                'total_debt': self._safe_get(info, 'totalDebt'),
+                'total_revenue': self._safe_get(info, 'totalRevenue'),
+                'revenue_per_share': self._safe_get(info, 'revenuePerShare'),
+                'gross_profits': self._safe_get(info, 'grossProfits'),
+                'free_cashflow': self._safe_get(info, 'freeCashflow'),
+                'operating_cashflow': self._safe_get(info, 'operatingCashflow'),
+                'ebitda': self._safe_get(info, 'ebitda'),
+                'net_income_to_common': self._safe_get(info, 'netIncomeToCommon'),
+                
+                # Показатели роста
+                'earnings_growth': self._safe_get(info, 'earningsGrowth'),
+                'revenue_growth': self._safe_get(info, 'revenueGrowth'),
+                'earnings_quarterly_growth': self._safe_get(info, 'earningsQuarterlyGrowth'),
+                
+                # Маржинальность
+                'gross_margins': self._safe_get(info, 'grossMargins'),
+                'ebitda_margins': self._safe_get(info, 'ebitdaMargins'),
+                'operating_margins': self._safe_get(info, 'operatingMargins'),
+                'profit_margins': self._safe_get(info, 'profitMargins'),
+                
+                # Акции и доля
+                'shares_outstanding': self._safe_get(info, 'sharesOutstanding'),
+                'float_shares': self._safe_get(info, 'floatShares'),
+                'shares_short': self._safe_get(info, 'sharesShort'),
+                'shares_short_prior_month': self._safe_get(info, 'sharesShortPriorMonth'),
+                'shares_percent_shares_out': self._safe_get(info, 'sharesPercentSharesOut'),
+                'held_percent_insiders': self._safe_get(info, 'heldPercentInsiders'),
+                'held_percent_institutions': self._safe_get(info, 'heldPercentInstitutions'),
+                'short_ratio': self._safe_get(info, 'shortRatio'),
+                'short_percent_of_float': self._safe_get(info, 'shortPercentOfFloat'),
+                
+                # Аналитические оценки
+                'target_high_price': self._safe_get(info, 'targetHighPrice'),
+                'target_low_price': self._safe_get(info, 'targetLowPrice'),
+                'target_mean_price': self._safe_get(info, 'targetMeanPrice'),
+                'target_median_price': self._safe_get(info, 'targetMedianPrice'),
+                'recommendation_mean': self._safe_get(info, 'recommendationMean'),
+                'recommendation_key': self._safe_get(info, 'recommendationKey'),
+                'number_of_analyst_opinions': self._safe_get(info, 'numberOfAnalystOpinions'),
+                'average_analyst_rating': self._safe_get(info, 'averageAnalystRating'),
+                
+                # Риски ESG
+                'audit_risk': self._safe_get(info, 'auditRisk'),
+                'board_risk': self._safe_get(info, 'boardRisk'),
+                'compensation_risk': self._safe_get(info, 'compensationRisk'),
+                'share_holder_rights_risk': self._safe_get(info, 'shareHolderRightsRisk'),
+                'overall_risk': self._safe_get(info, 'overallRisk'),
+                
+                # Временные метки
+                'last_fiscal_year_end': self._safe_get(info, 'lastFiscalYearEnd'),
+                'next_fiscal_year_end': self._safe_get(info, 'nextFiscalYearEnd'),
+                'most_recent_quarter': self._safe_get(info, 'mostRecentQuarter'),
+                'ex_dividend_date': self._safe_get(info, 'exDividendDate'),
+                'dividend_date': self._safe_get(info, 'dividendDate'),
+                'last_dividend_date': self._safe_get(info, 'lastDividendDate'),
+                'earnings_timestamp': self._safe_get(info, 'earningsTimestamp'),
+                'earnings_timestamp_start': self._safe_get(info, 'earningsTimestampStart'),
+                'earnings_timestamp_end': self._safe_get(info, 'earningsTimestampEnd'),
+                
+                # Разделение акций
+                'last_split_factor': self._safe_get(info, 'lastSplitFactor'),
+                'last_split_date': self._safe_get(info, 'lastSplitDate'),
                 
                 # Метаданные
                 'sector': self._safe_get(info, 'sector'),
                 'industry': self._safe_get(info, 'industry'),
                 'country': self._safe_get(info, 'country'),
                 'currency': self._safe_get(info, 'currency'),
+                'exchange': self._safe_get(info, 'exchange'),
+                'quote_type': self._safe_get(info, 'quoteType'),
+                'market_state': self._safe_get(info, 'marketState'),
                 
                 # Временные метки
                 'last_updated': datetime.now().isoformat(),
@@ -136,132 +214,22 @@ class FundamentalsUpdater:
             bool: True если успешно, False при ошибке
         """
         try:
-            with self.db_connection.get_cursor() as cursor:
-                # Подготавливаем SQL запрос для вставки/обновления
-                sql = """
-                    INSERT OR REPLACE INTO fundamentals (
-                        symbol, market_cap, enterprise_value, pe_ratio, forward_pe,
-                        peg_ratio, price_to_book, price_to_sales, enterprise_to_revenue,
-                        enterprise_to_ebitda, return_on_equity, return_on_assets,
-                        return_on_capital, current_ratio, quick_ratio, debt_to_equity,
-                        dividend_yield, dividend_rate, payout_ratio, beta,
-                        fifty_two_week_high, fifty_two_week_low, fifty_day_average,
-                        two_hundred_day_average, sector, industry, country, currency,
-                        last_updated, data_source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                
-                # Подготавливаем значения для вставки
-                values = (
-                    fundamentals['symbol'],
-                    fundamentals['market_cap'],
-                    fundamentals['enterprise_value'],
-                    fundamentals['pe_ratio'],
-                    fundamentals['forward_pe'],
-                    fundamentals['peg_ratio'],
-                    fundamentals['price_to_book'],
-                    fundamentals['price_to_sales'],
-                    fundamentals['enterprise_to_revenue'],
-                    fundamentals['enterprise_to_ebitda'],
-                    fundamentals['return_on_equity'],
-                    fundamentals['return_on_assets'],
-                    fundamentals['return_on_capital'],
-                    fundamentals['current_ratio'],
-                    fundamentals['quick_ratio'],
-                    fundamentals['debt_to_equity'],
-                    fundamentals['dividend_yield'],
-                    fundamentals['dividend_rate'],
-                    fundamentals['payout_ratio'],
-                    fundamentals['beta'],
-                    fundamentals['fifty_two_week_high'],
-                    fundamentals['fifty_two_week_low'],
-                    fundamentals['fifty_day_average'],
-                    fundamentals['two_hundred_day_average'],
-                    fundamentals['sector'],
-                    fundamentals['industry'],
-                    fundamentals['country'],
-                    fundamentals['currency'],
-                    fundamentals['last_updated'],
-                    fundamentals['data_source']
-                )
-                
-                cursor.execute(sql, values)
-                return True
+            # Используем метод из connection.py для сохранения
+            return self.db_connection.save_fundamentals(fundamentals)
                 
         except Exception as e:
             logger.error(f"Ошибка при сохранении данных для {fundamentals['symbol']}: {e}")
             return False
     
-    def create_fundamentals_table(self):
-        """Создать таблицу fundamentals если её нет"""
-        try:
-            with self.db_connection.get_cursor() as cursor:
-                # Проверяем, существует ли таблица
-                cursor.execute("""
-                    SELECT name FROM sqlite_master 
-                    WHERE type='table' AND name='fundamentals'
-                """)
-                
-                if not cursor.fetchone():
-                    logger.info("Создаю таблицу fundamentals...")
-                    
-                    # Создаем таблицу
-                    cursor.execute("""
-                        CREATE TABLE IF NOT EXISTS fundamentals (
-                            symbol              TEXT PRIMARY KEY,
-                            market_cap          REAL,
-                            enterprise_value    REAL,
-                            pe_ratio            REAL,
-                            forward_pe          REAL,
-                            peg_ratio           REAL,
-                            price_to_book       REAL,
-                            price_to_sales      REAL,
-                            enterprise_to_revenue REAL,
-                            enterprise_to_ebitda REAL,
-                            return_on_equity    REAL,
-                            return_on_assets    REAL,
-                            return_on_capital   REAL,
-                            current_ratio       REAL,
-                            quick_ratio         REAL,
-                            debt_to_equity      REAL,
-                            dividend_yield      REAL,
-                            dividend_rate       REAL,
-                            payout_ratio        REAL,
-                            beta                REAL,
-                            fifty_two_week_high REAL,
-                            fifty_two_week_low  REAL,
-                            fifty_day_average   REAL,
-                            two_hundred_day_average REAL,
-                            sector              TEXT,
-                            industry            TEXT,
-                            country             TEXT,
-                            currency            TEXT,
-                            last_updated        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            data_source         TEXT NOT NULL DEFAULT 'yahoo_finance'
-                        )
-                    """)
-                    
-                    # Создаем индексы
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_sector ON fundamentals(sector)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_industry ON fundamentals(industry)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_cap)")
-                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamentals_pe_ratio ON fundamentals(pe_ratio)")
-                    
-                    logger.info("[OK] Таблица fundamentals создана успешно")
-                else:
-                    logger.info("[OK] Таблица fundamentals уже существует")
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при создании таблицы: {e}")
     
-    def update_all_fundamentals(self, delay_seconds: float = 0.1, max_symbols: int = None, max_age_months: int = 3):
+    def update_all_fundamentals(self, delay_seconds: float = 0.1, max_symbols: int = None, max_age_days: int = 90):
         """
         Обновить фундаментальные данные для символов, требующих обновления
         
         Args:
             delay_seconds: Задержка между запросами (для избежания блокировки)
             max_symbols: Максимальное количество символов для обработки
-            max_age_months: Максимальный возраст данных в месяцах
+            max_age_days: Максимальный возраст данных в днях
         """
         try:
             # Убеждаемся что таблица fundamentals существует
@@ -270,17 +238,17 @@ class FundamentalsUpdater:
                 return
             
             # Получаем символы, требующие обновления
-            symbols_to_update = self.db_connection.get_fundamentals_symbols_needing_update(max_age_months)
+            symbols_to_update = self.db_connection.get_fundamentals_symbols_needing_update(max_age_days)
             
             if not symbols_to_update:
-                logger.info("Все символы имеют актуальные данные (не старше 3 месяцев)")
+                logger.info(f"Все символы имеют актуальные данные (не старше {max_age_days} дней)")
                 return
             
             # Ограничиваем количество символов если указан лимит
             if max_symbols is not None:
                 symbols_to_update = symbols_to_update[:max_symbols]
             
-            logger.info(f"Найдено {len(symbols_to_update)} символов, требующих обновления (возраст > {max_age_months} месяцев)")
+            logger.info(f"Найдено {len(symbols_to_update)} символов, требующих обновления (возраст > {max_age_days} дней)")
             logger.info(f"Обрабатываю {len(symbols_to_update)} символов (лимит: {max_symbols})")
             
             successful_updates = 0
@@ -335,8 +303,8 @@ class FundamentalsUpdater:
                 
             # Показываем информацию об обновлении
             logger.info(f"\nИНФОРМАЦИЯ ОБ ОБНОВЛЕНИИ:")
-            logger.info(f"Обновлялись только символы старше {max_age_months} месяцев")
-            logger.info(f"Следующий запуск обновит символы, которые станут старше {max_age_months} месяцев")
+            logger.info(f"Обновлялись только символы старше {max_age_days} дней")
+            logger.info(f"Следующий запуск обновит символы, которые станут старше {max_age_days} дней")
             
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении: {e}")
@@ -354,8 +322,15 @@ def main():
         # Создаем обновлятель
         updater = FundamentalsUpdater()
         
-        # Запускаем обновление (только символы старше 3 месяцев, лимит 100)
-        updater.update_all_fundamentals(delay_seconds=0, max_symbols=None, max_age_months=3)
+        # Принудительно обновляем структуру таблицы, добавляя новые поля если их нет
+        print("Обновляем структуру таблицы fundamentals...")
+        updater.db_connection.ensure_fundamentals_table()
+        
+        # Тестовый запрос для одного символа
+        f = updater.get_fundamentals_for_symbol("AAPL")
+        
+        # Запускаем обновление (только символы старше 1 дня, без лимита)
+        updater.update_all_fundamentals(delay_seconds=0, max_symbols=None, max_age_days=1)
         
     except KeyboardInterrupt:
         print("\nОбновление прервано пользователем")

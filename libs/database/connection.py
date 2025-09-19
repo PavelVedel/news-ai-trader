@@ -271,7 +271,7 @@ class DatabaseConnection:
     
     def ensure_fundamentals_table(self) -> bool:
         """
-        Убедиться что таблица fundamentals существует
+        Убедиться что таблица fundamentals существует и имеет все необходимые поля
         
         Returns:
             bool: True если таблица создана/существует, False при ошибке
@@ -287,10 +287,12 @@ class DatabaseConnection:
                 if not cursor.fetchone():
                     print("Создаю таблицу fundamentals...")
                     
-                    # Создаем таблицу
+                    # Создаем таблицу с полной схемой
                     cursor.execute("""
                         CREATE TABLE IF NOT EXISTS fundamentals (
                             symbol              TEXT PRIMARY KEY,
+                            
+                            -- Основные финансовые показатели
                             market_cap          REAL,
                             enterprise_value    REAL,
                             pe_ratio            REAL,
@@ -300,24 +302,114 @@ class DatabaseConnection:
                             price_to_sales      REAL,
                             enterprise_to_revenue REAL,
                             enterprise_to_ebitda REAL,
+                            
+                            -- Показатели доходности
                             return_on_equity    REAL,
                             return_on_assets    REAL,
                             return_on_capital   REAL,
+                            
+                            -- Показатели ликвидности
                             current_ratio       REAL,
                             quick_ratio         REAL,
                             debt_to_equity      REAL,
+                            
+                            -- Дивиденды
                             dividend_yield      REAL,
                             dividend_rate       REAL,
                             payout_ratio        REAL,
+                            five_year_avg_dividend_yield REAL,
+                            trailing_annual_dividend_rate REAL,
+                            trailing_annual_dividend_yield REAL,
+                            
+                            -- Технические показатели
                             beta                REAL,
                             fifty_two_week_high REAL,
                             fifty_two_week_low  REAL,
                             fifty_day_average   REAL,
                             two_hundred_day_average REAL,
+                            fifty_two_week_change_percent REAL,
+                            fifty_day_average_change REAL,
+                            fifty_day_average_change_percent REAL,
+                            two_hundred_day_average_change REAL,
+                            two_hundred_day_average_change_percent REAL,
+                            
+                            -- Дополнительные финансовые показатели
+                            book_value          REAL,
+                            total_cash          REAL,
+                            total_cash_per_share REAL,
+                            total_debt          REAL,
+                            total_revenue       REAL,
+                            revenue_per_share   REAL,
+                            gross_profits       REAL,
+                            free_cashflow       REAL,
+                            operating_cashflow  REAL,
+                            ebitda              REAL,
+                            net_income_to_common REAL,
+                            
+                            -- Показатели роста
+                            earnings_growth     REAL,
+                            revenue_growth      REAL,
+                            earnings_quarterly_growth REAL,
+                            
+                            -- Маржинальность
+                            gross_margins       REAL,
+                            ebitda_margins      REAL,
+                            operating_margins   REAL,
+                            profit_margins      REAL,
+                            
+                            -- Акции и доля
+                            shares_outstanding  REAL,
+                            float_shares        REAL,
+                            shares_short        REAL,
+                            shares_short_prior_month REAL,
+                            shares_percent_shares_out REAL,
+                            held_percent_insiders REAL,
+                            held_percent_institutions REAL,
+                            short_ratio         REAL,
+                            short_percent_of_float REAL,
+                            
+                            -- Аналитические оценки
+                            target_high_price   REAL,
+                            target_low_price    REAL,
+                            target_mean_price   REAL,
+                            target_median_price REAL,
+                            recommendation_mean REAL,
+                            recommendation_key  TEXT,
+                            number_of_analyst_opinions INTEGER,
+                            average_analyst_rating TEXT,
+                            
+                            -- Риски ESG
+                            audit_risk          INTEGER,
+                            board_risk          INTEGER,
+                            compensation_risk   INTEGER,
+                            share_holder_rights_risk INTEGER,
+                            overall_risk        INTEGER,
+                            
+                            -- Временные метки
+                            last_fiscal_year_end REAL,
+                            next_fiscal_year_end REAL,
+                            most_recent_quarter REAL,
+                            ex_dividend_date    REAL,
+                            dividend_date       REAL,
+                            last_dividend_date  REAL,
+                            earnings_timestamp  REAL,
+                            earnings_timestamp_start REAL,
+                            earnings_timestamp_end REAL,
+                            
+                            -- Разделение акций
+                            last_split_factor   TEXT,
+                            last_split_date     REAL,
+                            
+                            -- Метаданные
                             sector              TEXT,
                             industry            TEXT,
                             country             TEXT,
                             currency            TEXT,
+                            exchange            TEXT,
+                            quote_type          TEXT,
+                            market_state        TEXT,
+                            
+                            -- Временные метки
                             last_updated        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                             data_source         TEXT NOT NULL DEFAULT 'yahoo_finance'
                         )
@@ -332,11 +424,115 @@ class DatabaseConnection:
                     print("[OK] Таблица fundamentals создана успешно")
                 else:
                     print("[OK] Таблица fundamentals уже существует")
+                    
+                    # Проверяем и добавляем новые колонки если их нет
+                    self._upgrade_fundamentals_table()
                 
                 return True
                     
         except Exception as e:
             print(f"Ошибка при создании таблицы fundamentals: {e}")
+            return False
+            
+    def _upgrade_fundamentals_table(self) -> bool:
+        """
+        Обновить структуру таблицы fundamentals, добавив новые поля если их нет
+        
+        Returns:
+            bool: True если успешно, False при ошибке
+        """
+        try:
+            print("Проверяю структуру таблицы fundamentals и добавляю недостающие поля...")
+            
+            # Список новых полей для проверки и добавления
+            new_fields = [
+                ("five_year_avg_dividend_yield", "REAL"),
+                ("trailing_annual_dividend_rate", "REAL"),
+                ("trailing_annual_dividend_yield", "REAL"),
+                ("fifty_two_week_change_percent", "REAL"),
+                ("fifty_day_average_change", "REAL"),
+                ("fifty_day_average_change_percent", "REAL"),
+                ("two_hundred_day_average_change", "REAL"),
+                ("two_hundred_day_average_change_percent", "REAL"),
+                ("book_value", "REAL"),
+                ("total_cash", "REAL"),
+                ("total_cash_per_share", "REAL"),
+                ("total_debt", "REAL"),
+                ("total_revenue", "REAL"),
+                ("revenue_per_share", "REAL"),
+                ("gross_profits", "REAL"),
+                ("free_cashflow", "REAL"),
+                ("operating_cashflow", "REAL"),
+                ("ebitda", "REAL"),
+                ("net_income_to_common", "REAL"),
+                ("earnings_growth", "REAL"),
+                ("revenue_growth", "REAL"),
+                ("earnings_quarterly_growth", "REAL"),
+                ("gross_margins", "REAL"),
+                ("ebitda_margins", "REAL"),
+                ("operating_margins", "REAL"),
+                ("profit_margins", "REAL"),
+                ("shares_outstanding", "REAL"),
+                ("float_shares", "REAL"),
+                ("shares_short", "REAL"),
+                ("shares_short_prior_month", "REAL"),
+                ("shares_percent_shares_out", "REAL"),
+                ("held_percent_insiders", "REAL"),
+                ("held_percent_institutions", "REAL"),
+                ("short_ratio", "REAL"),
+                ("short_percent_of_float", "REAL"),
+                ("target_high_price", "REAL"),
+                ("target_low_price", "REAL"),
+                ("target_mean_price", "REAL"),
+                ("target_median_price", "REAL"),
+                ("recommendation_mean", "REAL"),
+                ("recommendation_key", "TEXT"),
+                ("number_of_analyst_opinions", "INTEGER"),
+                ("average_analyst_rating", "TEXT"),
+                ("audit_risk", "INTEGER"),
+                ("board_risk", "INTEGER"),
+                ("compensation_risk", "INTEGER"),
+                ("share_holder_rights_risk", "INTEGER"),
+                ("overall_risk", "INTEGER"),
+                ("last_fiscal_year_end", "REAL"),
+                ("next_fiscal_year_end", "REAL"),
+                ("most_recent_quarter", "REAL"),
+                ("ex_dividend_date", "REAL"),
+                ("dividend_date", "REAL"),
+                ("last_dividend_date", "REAL"),
+                ("earnings_timestamp", "REAL"),
+                ("earnings_timestamp_start", "REAL"),
+                ("earnings_timestamp_end", "REAL"),
+                ("last_split_factor", "TEXT"),
+                ("last_split_date", "REAL"),
+                ("exchange", "TEXT"),
+                ("quote_type", "TEXT"),
+                ("market_state", "TEXT")
+            ]
+            
+            with self.get_cursor() as cursor:
+                # Получаем текущие колонки
+                cursor.execute("PRAGMA table_info(fundamentals)")
+                existing_columns = {row[1] for row in cursor.fetchall()}
+                
+                # Добавляем отсутствующие колонки
+                added_columns = 0
+                for field_name, field_type in new_fields:
+                    if field_name not in existing_columns:
+                        sql = f"ALTER TABLE fundamentals ADD COLUMN {field_name} {field_type}"
+                        cursor.execute(sql)
+                        added_columns += 1
+                        print(f"Добавлена колонка: {field_name} ({field_type})")
+                
+                if added_columns > 0:
+                    print(f"[OK] Добавлено {added_columns} новых колонок в таблицу fundamentals")
+                else:
+                    print("[OK] Таблица fundamentals уже содержит все необходимые колонки")
+                
+                return True
+                
+        except Exception as e:
+            print(f"Ошибка при обновлении структуры таблицы fundamentals: {e}")
             return False
     
     def save_fundamentals(self, fundamentals: dict) -> bool:
@@ -352,58 +548,97 @@ class DatabaseConnection:
         try:
             with self.get_cursor() as cursor:
                 # Подготавливаем SQL запрос для вставки/обновления
-                sql = """
+                # Создаем список полей и значений
+                fields = [
+                    "symbol",
+                    
+                    # Основные финансовые показатели
+                    "market_cap", "enterprise_value", "pe_ratio", "forward_pe",
+                    "peg_ratio", "price_to_book", "price_to_sales", "enterprise_to_revenue",
+                    "enterprise_to_ebitda",
+                    
+                    # Показатели доходности
+                    "return_on_equity", "return_on_assets", "return_on_capital",
+                    
+                    # Показатели ликвидности
+                    "current_ratio", "quick_ratio", "debt_to_equity",
+                    
+                    # Дивиденды
+                    "dividend_yield", "dividend_rate", "payout_ratio", "five_year_avg_dividend_yield",
+                    "trailing_annual_dividend_rate", "trailing_annual_dividend_yield",
+                    
+                    # Технические показатели
+                    "beta", "fifty_two_week_high", "fifty_two_week_low", "fifty_day_average",
+                    "two_hundred_day_average", "fifty_two_week_change_percent",
+                    "fifty_day_average_change", "fifty_day_average_change_percent",
+                    "two_hundred_day_average_change", "two_hundred_day_average_change_percent",
+                    
+                    # Дополнительные финансовые показатели
+                    "book_value", "total_cash", "total_cash_per_share", "total_debt",
+                    "total_revenue", "revenue_per_share", "gross_profits",
+                    "free_cashflow", "operating_cashflow", "ebitda", "net_income_to_common",
+                    
+                    # Показатели роста
+                    "earnings_growth", "revenue_growth", "earnings_quarterly_growth",
+                    
+                    # Маржинальность
+                    "gross_margins", "ebitda_margins", "operating_margins", "profit_margins",
+                    
+                    # Акции и доля
+                    "shares_outstanding", "float_shares", "shares_short", "shares_short_prior_month",
+                    "shares_percent_shares_out", "held_percent_insiders", "held_percent_institutions",
+                    "short_ratio", "short_percent_of_float",
+                    
+                    # Аналитические оценки
+                    "target_high_price", "target_low_price", "target_mean_price", "target_median_price",
+                    "recommendation_mean", "recommendation_key", "number_of_analyst_opinions",
+                    "average_analyst_rating",
+                    
+                    # Риски ESG
+                    "audit_risk", "board_risk", "compensation_risk", "share_holder_rights_risk",
+                    "overall_risk",
+                    
+                    # Временные метки
+                    "last_fiscal_year_end", "next_fiscal_year_end", "most_recent_quarter",
+                    "ex_dividend_date", "dividend_date", "last_dividend_date",
+                    "earnings_timestamp", "earnings_timestamp_start", "earnings_timestamp_end",
+                    
+                    # Разделение акций
+                    "last_split_factor", "last_split_date",
+                    
+                    # Метаданные
+                    "sector", "industry", "country", "currency", "exchange", "quote_type", "market_state",
+                    
+                    # Временные метки
+                    "last_updated", "data_source"
+                ]
+                
+                # Создаем SQL запрос с правильным количеством параметров
+                fields_str = ", ".join(fields)
+                placeholders = ", ".join(["?"] * len(fields))
+                
+                sql = f"""
                     INSERT OR REPLACE INTO fundamentals (
-                        symbol, market_cap, enterprise_value, pe_ratio, forward_pe,
-                        peg_ratio, price_to_book, price_to_sales, enterprise_to_revenue,
-                        enterprise_to_ebitda, return_on_equity, return_on_assets,
-                        return_on_capital, current_ratio, quick_ratio, debt_to_equity,
-                        dividend_yield, dividend_rate, payout_ratio, beta,
-                        fifty_two_week_high, fifty_two_week_low, fifty_day_average,
-                        two_hundred_day_average, sector, industry, country, currency,
-                        last_updated, data_source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        {fields_str}
+                    ) VALUES ({placeholders})
                 """
                 
                 # Подготавливаем значения для вставки
-                values = (
-                    fundamentals['symbol'],
-                    fundamentals['market_cap'],
-                    fundamentals['enterprise_value'],
-                    fundamentals['pe_ratio'],
-                    fundamentals['forward_pe'],
-                    fundamentals['peg_ratio'],
-                    fundamentals['price_to_book'],
-                    fundamentals['price_to_sales'],
-                    fundamentals['enterprise_to_revenue'],
-                    fundamentals['enterprise_to_ebitda'],
-                    fundamentals['return_on_equity'],
-                    fundamentals['return_on_assets'],
-                    fundamentals['return_on_capital'],
-                    fundamentals['current_ratio'],
-                    fundamentals['quick_ratio'],
-                    fundamentals['debt_to_equity'],
-                    fundamentals['dividend_yield'],
-                    fundamentals['dividend_rate'],
-                    fundamentals['payout_ratio'],
-                    fundamentals['beta'],
-                    fundamentals['fifty_two_week_high'],
-                    fundamentals['fifty_two_week_low'],
-                    fundamentals['fifty_day_average'],
-                    fundamentals['two_hundred_day_average'],
-                    fundamentals['sector'],
-                    fundamentals['industry'],
-                    fundamentals['country'],
-                    fundamentals['currency'],
-                    fundamentals['last_updated'],
-                    fundamentals['data_source']
-                )
+                values = []
+                for field in fields:
+                    if field == 'data_source':
+                        values.append(fundamentals.get(field, 'yahoo_finance'))
+                    else:
+                        values.append(fundamentals.get(field))
+                
+                # Преобразуем список в кортеж для передачи в execute
+                values = tuple(values)
                 
                 cursor.execute(sql, values)
                 return True
                 
         except Exception as e:
-            print(f"Ошибка при сохранении данных для {fundamentals['symbol']}: {e}")
+            print(f"Ошибка при сохранении данных для {fundamentals.get('symbol', 'unknown')}: {e}")
             return False
     
     def get_fundamentals(self, symbol: str) -> Optional[dict]:
@@ -473,12 +708,12 @@ class DatabaseConnection:
             print(f"Ошибка при удалении данных для {symbol}: {e}")
             return False
     
-    def get_fundamentals_symbols_needing_update(self, max_age_months: int = 3) -> list[str]:
+    def get_fundamentals_symbols_needing_update(self, max_age_days: int = 90) -> list[str]:
         """
         Получить символы, которые требуют обновления fundamentals
         
         Args:
-            max_age_months: Максимальный возраст данных в месяцах
+            max_age_days: Максимальный возраст данных в днях
             
         Returns:
             list[str]: Список символов для обновления
@@ -511,11 +746,10 @@ class DatabaseConnection:
                 
                 # Определяем символы, требующие обновления
                 symbols_to_update = []
-                cutoff_date = datetime.now().replace(day=1)  # Текущий месяц
                 
-                for i in range(max_age_months):
-                    cutoff_date = cutoff_date.replace(month=cutoff_date.month - 1)
-                
+                # Вычисляем дату отсечения на основе max_age_days
+                from datetime import datetime, timedelta
+                cutoff_date = datetime.now() - timedelta(days=max_age_days)
                 cutoff_date_str = cutoff_date.isoformat()
                 
                 for symbol in all_symbols:
@@ -563,6 +797,19 @@ class DatabaseConnection:
                 cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE market_cap IS NOT NULL")
                 symbols_with_market_cap = cursor.fetchone()[0]
                 
+                # Новые статистики
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE dividend_yield IS NOT NULL")
+                symbols_with_dividend = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE recommendation_key IS NOT NULL")
+                symbols_with_recommendations = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE exchange IS NOT NULL")
+                symbols_with_exchange = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM fundamentals WHERE total_revenue IS NOT NULL")
+                symbols_with_revenue = cursor.fetchone()[0]
+                
                 # Последнее обновление
                 cursor.execute("SELECT MAX(last_updated) FROM fundamentals")
                 last_update = cursor.fetchone()[0]
@@ -572,6 +819,10 @@ class DatabaseConnection:
                     'symbols_with_sector': symbols_with_sector,
                     'symbols_with_pe': symbols_with_pe,
                     'symbols_with_market_cap': symbols_with_market_cap,
+                    'symbols_with_dividend': symbols_with_dividend,
+                    'symbols_with_recommendations': symbols_with_recommendations,
+                    'symbols_with_exchange': symbols_with_exchange,
+                    'symbols_with_revenue': symbols_with_revenue,
                     'last_update': last_update
                 }
                 
