@@ -1006,3 +1006,149 @@ class DatabaseConnection:
             symbol_info_dict[symbol] = self.get_infos(symbol)
         out_dict['symbol_info'] = symbol_info_dict
         return out_dict
+        
+    def ensure_news_analysis_table(self) -> bool:
+        """
+        Создать таблицу news_analysis если она не существует
+        
+        Returns:
+            bool: True если успешно, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Читаем SQL схему для news_analysis
+                schema_file = Path(__file__).parent / "news_analysis.sql"
+                
+                if schema_file.exists():
+                    with open(schema_file, 'r', encoding='utf-8') as f:
+                        schema_sql = f.read()
+                    cursor.executescript(schema_sql)
+                else:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS news_analysis (
+                          news_id                     INTEGER PRIMARY KEY REFERENCES news_raw(news_id) ON DELETE CASCADE,
+                          created_at_utc                TEXT,
+                          headline                    TEXT NOT NULL,
+                          symbols_input               TEXT NOT NULL,  -- JSON array
+                          actors                      TEXT,           -- JSON array of actor objects
+                          event                       TEXT,           -- JSON object with event details
+                          symbol_mentions_in_text     TEXT,           -- JSON array
+                          symbol_not_mentioned_in_text TEXT,          -- JSON array
+                          unresolved_entities         TEXT,           -- JSON array
+                          is_news_grounded            INTEGER DEFAULT 0,  -- Boolean: 0=false, 1=true
+                          analyzed_at                 TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    cursor.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_news_analysis_grounded 
+                        ON news_analysis(is_news_grounded)
+                    """)
+                
+                print("[OK] Таблица news_analysis создана или уже существует")
+                return True
+                
+        except Exception as e:
+            print(f"Ошибка при создании таблицы news_analysis: {e}")
+            return False
+    
+    def save_news_analysis(self, analysis_data: dict) -> bool:
+        """
+        Сохранить результаты анализа новости в базу данных
+        
+        Args:
+            analysis_data: Словарь с результатами анализа
+            
+        Returns:
+            bool: True если успешно, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Конвертируем вложенные словари/списки в JSON строки
+                data = {
+                    'news_id': analysis_data.get('news_id'),
+                    'created_at_utc': analysis_data.get('created_at_utc'),
+                    'headline': analysis_data.get('headline'),
+                    'symbols_input': json.dumps(analysis_data.get('symbols_input', []), ensure_ascii=False),
+                    'actors': json.dumps(analysis_data.get('actors', []), ensure_ascii=False),
+                    'event': json.dumps(analysis_data.get('event', {}), ensure_ascii=False),
+                    'symbol_mentions_in_text': json.dumps(analysis_data.get('symbol_mentions_in_text', []), ensure_ascii=False),
+                    'symbol_not_mentioned_in_text': json.dumps(analysis_data.get('symbol_not_mentioned_in_text', []), ensure_ascii=False),
+                    'unresolved_entities': json.dumps(analysis_data.get('unresolved_entities', []), ensure_ascii=False)
+                }
+                
+                cursor.execute("""
+                    INSERT OR REPLACE INTO news_analysis (
+                        news_id, created_at_utc, headline, symbols_input,
+                        actors, event, symbol_mentions_in_text,
+                        symbol_not_mentioned_in_text, unresolved_entities
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    data['news_id'], data['created_at_utc'], data['headline'], data['symbols_input'],
+                    data['actors'], data['event'], data['symbol_mentions_in_text'],
+                    data['symbol_not_mentioned_in_text'], data['unresolved_entities']
+                ))
+                
+                print(f"[OK] Анализ для новости {data['news_id']} сохранен")
+                return True
+                
+        except Exception as e:
+            print(f"Ошибка при сохранении анализа новости {analysis_data.get('news_id')}: {e}")
+            return False
+    
+    def get_news_analysis(self, news_id: int) -> Optional[dict]:
+        """
+        Получить результаты анализа новости
+        
+        Args:
+            news_id: ID новости
+            
+        Returns:
+            dict: Словарь с результатами анализа или None если не найдено
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM news_analysis WHERE news_id = ?
+                """, (news_id,))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Конвертируем JSON строки обратно в объекты Python
+                result = dict(row)
+                for field in ['symbols_input', 'actors', 'event', 'symbol_mentions_in_text', 
+                             'symbol_not_mentioned_in_text', 'unresolved_entities']:
+                    if result.get(field):
+                        result[field] = json.loads(result[field])
+                
+                return result
+                
+        except Exception as e:
+            print(f"Ошибка при получении анализа новости {news_id}: {e}")
+            return None
+    
+    def update_news_grounding(self, news_id: int, is_grounded: bool = True) -> bool:
+        """
+        Обновить статус заземления (grounding) для новости
+        
+        Args:
+            news_id: ID новости
+            is_grounded: True если новость заземлена, False иначе
+            
+        Returns:
+            bool: True если успешно, False при ошибке
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE news_analysis 
+                    SET is_news_grounded = ? 
+                    WHERE news_id = ?
+                """, (1 if is_grounded else 0, news_id))
+                
+                return cursor.rowcount > 0
+                
+        except Exception as e:
+            print(f"Ошибка при обновлении статуса заземления для новости {news_id}: {e}")
+            return False

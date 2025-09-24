@@ -330,7 +330,7 @@ def main():
         f = updater.get_fundamentals_for_symbol("AAPL")
         
         # Запускаем обновление (только символы старше 1 дня, без лимита)
-        updater.update_all_fundamentals(delay_seconds=0, max_symbols=None, max_age_days=1)
+        updater.update_all_fundamentals(delay_seconds=0, max_symbols=None, max_age_days=2*30)
         
     except KeyboardInterrupt:
         print("\nОбновление прервано пользователем")
