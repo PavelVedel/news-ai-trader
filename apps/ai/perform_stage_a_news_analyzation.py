@@ -235,14 +235,36 @@ def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list
     logger.info(f"Stage A: Найдено {len(news_items)} новостей для анализа")
     
     results = []
+    processing_times = []
+    start_time = time.time()
+    
     for i_item, item in enumerate(news_items):
         news_dict = dict(item)
         logger.info(f"Stage A: Анализирую новость {news_dict['news_id']} ({i_item+1}/{len(news_items)}): {news_dict['headline'][:50]}...")
+        
         # Анализируем новость
         tic = time.time()
         analysis_result = analyze_one(news_dict)
         toc = time.time()
-        logger.info(f"Stage A: Анализ новости {news_dict['news_id']} занял {toc-tic:.2f} секунд")
+        
+        # Время обработки этой новости
+        processing_time = toc - tic
+        processing_times.append(processing_time)
+        
+        # Рассчитываем среднее время и оценку оставшегося времени
+        avg_time = sum(processing_times) / len(processing_times)
+        remaining_items = len(news_items) - (i_item + 1)
+        estimated_remaining_time = avg_time * remaining_items
+        
+        # Форматируем оставшееся время
+        remaining_hours = int(estimated_remaining_time // 3600)
+        remaining_minutes = int((estimated_remaining_time % 3600) // 60)
+        remaining_seconds = int(estimated_remaining_time % 60)
+        
+        # Выводим информацию
+        logger.info(f"Stage A: Анализ новости {news_dict['news_id']} занял {processing_time:.2f} секунд")
+        logger.info(f"Stage A: Среднее время: {avg_time:.2f} сек/новость, осталось: {remaining_items} новостей " +
+                   f"(~{remaining_hours}ч {remaining_minutes}м {remaining_seconds}с)")
         
         if analysis_result:
             results.append(analysis_result)
@@ -254,7 +276,21 @@ def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list
         else:
             logger.warning(f"Stage A: Не удалось проанализировать новость {news_dict['news_id']}")
     
-    logger.info(f"Stage A: Обработано {len(results)} новостей из {len(news_items)}")
+    # Рассчитываем общее время выполнения
+    total_time = time.time() - start_time
+    hours = int(total_time // 3600)
+    minutes = int((total_time % 3600) // 60)
+    seconds = int(total_time % 60)
+    
+    # Выводим статистику выполнения
+    if processing_times:
+        avg_time = sum(processing_times) / len(processing_times)
+        logger.info(f"Stage A: Обработано {len(results)} новостей из {len(news_items)}")
+        logger.info(f"Stage A: Общее время выполнения: {hours}ч {minutes}м {seconds}с")
+        logger.info(f"Stage A: Среднее время на новость: {avg_time:.2f} секунд")
+    else:
+        logger.info(f"Stage A: Новости не были обработаны")
+    
     return results
 
 def process_one_news_stage_a(news_id: int, save_to_db: bool = True) -> Optional[dict[str, Any]]:
