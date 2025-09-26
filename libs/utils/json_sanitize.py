@@ -73,8 +73,88 @@ def extract_balanced_json(text: str) -> str:
             j = t.rfind("}", start, j-1)
     raise ValueError("no valid json substring found")
 
+def normalize_brackets(text: str) -> str:
+    """
+    Нормализует скобки в JSON, исправляя ] вместо } и [ вместо {.
+    Использует стек для отслеживания открывающих скобок.
+    
+    Args:
+        text: JSON строка с возможными ошибками скобок
+        
+    Returns:
+        str: JSON строка с исправленными скобками
+    """
+    # Удаляем префикс "content\n" если он есть
+    if text.startswith("content\n"):
+        text = text[8:]
+    
+    # Если текст обернут в одинарные кавычки, удаляем их
+    if text.startswith("'") and text.endswith("'"):
+        try:
+            import ast
+            text = ast.literal_eval(text)
+        except Exception:
+            # Если не получилось, просто удаляем кавычки
+            text = text[1:-1]
+    
+    result = []
+    stack = []  # Стек для отслеживания открывающих скобок
+    
+    i = 0
+    while i < len(text):
+        char = text[i]
+        
+        if char in '{[':
+            # Открывающая скобка - добавляем в стек
+            stack.append(char)
+            result.append(char)
+        elif char in '}]':
+            # Закрывающая скобка - проверяем соответствие
+            if not stack:
+                # Нет открывающих скобок - это ошибка, но продолжаем
+                result.append(char)
+            else:
+                last_open = stack.pop()
+                expected_close = '}' if last_open == '{' else ']'
+                
+                if char == expected_close:
+                    # Правильная закрывающая скобка
+                    result.append(char)
+                else:
+                    # Неправильная закрывающая скобка - исправляем
+                    result.append(expected_close)
+        else:
+            # Обычный символ
+            result.append(char)
+        
+        i += 1
+    
+    return ''.join(result)
+
+def smart_json_or_none(text: str) -> dict | None:
+    """
+    Умная функция для парсинга JSON с автоматическим исправлением ошибок.
+    
+    Args:
+        text: JSON строка с возможными ошибками
+        
+    Returns:
+        dict | None: Распарсенный JSON или None при неудаче
+    """
+    try:
+        # Сначала пробуем обычный парсинг
+        return json.loads(extract_balanced_json(text))
+    except Exception:
+        try:
+            # Если не получилось, исправляем скобки и пробуем снова
+            normalized_text = normalize_brackets(text)
+            return json.loads(extract_balanced_json(normalized_text))
+        except Exception:
+            return None
+
 def cheap_json_or_none(text: str):
     try:
-        return json.loads(extract_balanced_json(text))
+        balanced_json = extract_balanced_json(text)
+        return json.loads(balanced_json)
     except Exception:
         return None

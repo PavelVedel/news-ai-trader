@@ -4,7 +4,7 @@ from typing import Any, Iterable
 from libs.utils.json_sanitize import extract_json_block
 from libs.utils.logging_setup import get_logger
 from apps.ai.inference.lmstudio_client import chat_completion
-from libs.utils.json_sanitize import cheap_json_or_none, strip_fences
+from libs.utils.json_sanitize import smart_json_or_none, strip_fences
 from apps.ai.inference.lmstudio_client import chat_completion
 
 logger = get_logger("news.ai")
@@ -58,7 +58,7 @@ def analyze_one(item: dict[str, Any]) -> dict[str, Any]:
         [{"role":"system","content":SYSTEM},{"role":"user","content":build_user_prompt(item)}],
         temperature=0.2, max_tokens=700  # 700–800 достаточно
     )
-    data = cheap_json_or_none(content)
+    data = smart_json_or_none(content)
     if data is None:
         logger.warning("llm_json_parse_failed", extra={"payload":{
             "raw_head": content[:160], "raw_tail": content[-160:], "len": len(content)
@@ -107,7 +107,7 @@ def repair_json_with_llm(raw: str, allowed_symbols: list[str]) -> dict:
         [{"role":"system","content":REPAIR_SYSTEM},{"role":"user","content":msg}],
         temperature=0.0, max_tokens=500
     )
-    fixed = cheap_json_or_none(content)
+    fixed = smart_json_or_none(content)
     if fixed is None:
         # как последний фоллбек — минимальный каркас
         return {"story":{"summary_short":"","topics":[],"sentiment":0,"actionability":False,"confidence":0,"scope":"company"},"per_symbol":[]}

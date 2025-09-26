@@ -26,14 +26,13 @@ Randomness
 - Random Seed Mode: Default
 
 Optimizations
-- Flash Attention: Enabled (Experimental)
+- Flash Attention: Disabled (Experimental)
 - K Cache Quantization Type: Disabled (Experimental)
 - V Cache Quantization Type: Disabled (Experimental)
 """
-
 import json
 from typing import Any, Iterable
-from libs.utils.json_sanitize import cheap_json_or_none
+from libs.utils.json_sanitize import smart_json_or_none
 from libs.utils.logging_setup import get_logger
 from apps.ai.inference.lmstudio_client import chat_completion
 from libs.database.connection import DatabaseConnection
@@ -143,15 +142,15 @@ def analyze_one(item: dict[str, Any]) -> dict[str, Any]:
                 {"role": "system", "content": SYSTEM},
                 {"role": "user", "content": build_user_prompt(item)}
             ],
-            temperature=0.00,
+            temperature=0.05,
             max_tokens=5000  # Ensure we have enough tokens for the response
         )
 
         # Try to parse the JSON response
-        data = cheap_json_or_none(content)
+        data = smart_json_or_none(content)
         if data is None:
             logger.warning("Failed to parse LLM response as JSON", extra={
-                "news_id": item.get("id"),
+                "news_id": item.get("news_id"),
                 "content_preview": content[:200]
             })
             return None
@@ -182,7 +181,7 @@ def main():
     db.ensure_news_analysis_table()
 
     # Пример анализа одной новости
-    one_news = dict(db.get_news_by_id(200))
+    one_news = dict(db.get_news_by_id(11079))
     print("Исходная новость:")
     pprint(one_news)
 
@@ -204,6 +203,7 @@ def main():
             print(f"Headline: {saved['headline']}")
             print(f"Actors count: {len(saved['actors'])}")
             print(f"Event type: {saved['event'].get('type')}")
+    pass
 
 
 if __name__ == "__main__":
