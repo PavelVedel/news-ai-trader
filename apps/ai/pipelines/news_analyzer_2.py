@@ -322,7 +322,7 @@ def main():
     db = DatabaseConnection("data/db/news.db")
 
     # Создаем таблицу для результатов анализа
-    db.ensure_news_analysis_table()
+    db.ensure_news_analysis_a_table()
 
     # Пример анализа одной новости
     one_news = dict(db.get_news_by_id(264839))
@@ -336,11 +336,11 @@ def main():
 
     # Сохраняем результат в базу данных
     if res:
-        db.save_news_analysis(res)
+        db.save_news_analysis_a(res)
         print(f"\nРезультат анализа сохранен в БД для новости {one_news['news_id']}")
 
         # Проверяем что сохранилось
-        saved = db.get_news_analysis(one_news['news_id'])
+        saved = db.get_news_analysis_a(one_news['news_id'])
         if saved:
             print("\nПроверка сохраненного результата:")
             print(f"ID: {saved['news_id']}")

@@ -6,7 +6,7 @@ Stage A: Анализ новостей с помощью LLM
 import os
 import json
 import glob
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional, Any, List, Tuple
 from libs.database.connection import DatabaseConnection
@@ -25,6 +25,11 @@ SAVE_TO_DB = True
 MARKET_DATA_PATH = "data/market_data/yahoo/1m"
 # Фильтровать новости по наличию свечей
 FILTER_BY_CANDLES = True
+# Фильтровать старые записи по времени analyzed_at (CEST)
+# Если включено, скрипт сначала обновит все записи в news_analysis_a,
+# у которых analyzed_at раньше указанного времени
+FILTER_OLD_ANALYSIS = True
+FILTER_ANALYSIS_BEFORE = "2025-09-28 12:00:00"  # CEST время
 
 logger = get_logger("news.ai.stage_a")
 
@@ -142,6 +147,114 @@ def has_candles_for_news(news_dict: dict) -> bool:
         logger.error(f"Ошибка при проверке свечей для новости {news_dict.get('news_id')}: {str(e)}")
         return False
 
+def update_old_analysis_records(db: DatabaseConnection, filter_time_cest: str) -> int:
+    """
+    Обновляет старые записи в таблице news_analysis_a, у которых analyzed_at 
+    раньше указанного времени в CEST.
+    
+    Args:
+        db: Подключение к базе данных
+        filter_time_cest: Время в формате "YYYY-MM-DD HH:MM:SS" в CEST
+        
+    Returns:
+        int: Количество обновленных записей
+    """
+    try:
+        # Преобразуем CEST время в UTC для сравнения
+        # CEST = UTC + 2 часа, поэтому вычитаем 2 часа
+        filter_dt = datetime.strptime(filter_time_cest, "%Y-%m-%d %H:%M:%S")
+        filter_dt_utc = filter_dt.replace(tzinfo=None) - timedelta(hours=2)
+        filter_time_utc = filter_dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+        
+        logger.info(f"Обновляю записи с analyzed_at до {filter_time_cest} CEST ({filter_time_utc} UTC)")
+        
+        with db.get_cursor() as cursor:
+            # Сначала получаем количество записей для обновления
+            cursor.execute("""
+                SELECT COUNT(*) FROM news_analysis_a 
+                WHERE analyzed_at < ?
+            """, (filter_time_utc,))
+            
+            count = cursor.fetchone()[0]
+            logger.info(f"Найдено {count} записей для обновления")
+            
+            if count == 0:
+                return 0
+            
+            # Получаем все новости, которые нужно переанализировать
+            cursor.execute("""
+                SELECT n.* FROM news_raw n
+                INNER JOIN news_analysis_a a ON n.news_id = a.news_id
+                WHERE a.analyzed_at < ?
+                ORDER BY n.created_at_utc
+            """, (filter_time_utc,))
+            
+            news_items = cursor.fetchall()
+            logger.info(f"Получено {len(news_items)} новостей для переанализа")
+            
+            updated_count = 0
+            processing_times = []
+            start_time = time.time()
+            
+            for i_item, item in enumerate(news_items):
+                news_dict = dict(item)
+                news_id = news_dict['news_id']
+                
+                logger.info(f"Переанализирую новость {news_id} ({i_item+1}/{len(news_items)}): {news_dict['headline'][:50]}...")
+                
+                # Анализируем новость заново
+                tic = time.time()
+                analysis_result = analyze_one(news_dict)
+                toc = time.time()
+                
+                # Время обработки этой новости
+                processing_time = toc - tic
+                processing_times.append(processing_time)
+                
+                # Рассчитываем среднее время и оценку оставшегося времени
+                avg_time = sum(processing_times) / len(processing_times)
+                remaining_items = len(news_items) - (i_item + 1)
+                estimated_remaining_time = avg_time * remaining_items
+                
+                # Форматируем оставшееся время
+                remaining_hours = int(estimated_remaining_time // 3600)
+                remaining_minutes = int((estimated_remaining_time % 3600) // 60)
+                remaining_seconds = int(estimated_remaining_time % 60)
+                
+                # Выводим информацию
+                logger.info(f"Переанализ новости {news_id} занял {processing_time:.2f} секунд")
+                logger.info(f"Среднее время: {avg_time:.2f} сек/новость, осталось: {remaining_items} новостей " +
+                           f"(~{remaining_hours}ч {remaining_minutes}м {remaining_seconds}с)")
+                
+                if analysis_result:
+                    # Сохраняем обновленный результат
+                    db.save_news_analysis_a(analysis_result)
+                    updated_count += 1
+                    logger.info(f"Новость {news_id} успешно переанализирована")
+                else:
+                    logger.warning(f"Не удалось переанализировать новость {news_id}")
+            
+            # Рассчитываем общее время выполнения
+            total_time = time.time() - start_time
+            hours = int(total_time // 3600)
+            minutes = int((total_time % 3600) // 60)
+            seconds = int(total_time % 60)
+            
+            # Выводим статистику выполнения
+            if processing_times:
+                avg_time = sum(processing_times) / len(processing_times)
+                logger.info(f"Обновлено {updated_count} записей из {count}")
+                logger.info(f"Общее время выполнения: {hours}ч {minutes}м {seconds}с")
+                logger.info(f"Среднее время на новость: {avg_time:.2f} секунд")
+            else:
+                logger.info(f"Обновлено {updated_count} записей из {count}")
+            
+            return updated_count
+            
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении старых записей: {str(e)}")
+        return 0
+
 def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list:
     """
     Stage A: Обработать все новости из базы данных, которые еще не были проанализированы
@@ -157,13 +270,19 @@ def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list
     
     # Создаем таблицу для результатов анализа если её нет
     if save_to_db:
-        db.ensure_news_analysis_table()
+        db.ensure_news_analysis_a_table()
+    
+    # Обновляем старые записи если включена соответствующая опция
+    if FILTER_OLD_ANALYSIS and save_to_db:
+        logger.info("Обновляю старые записи анализа...")
+        updated_count = update_old_analysis_records(db, FILTER_ANALYSIS_BEFORE)
+        logger.info(f"Обновлено {updated_count} старых записей")
     
     # Получаем все новости, которые еще не были проанализированы
     with db.get_cursor() as cursor:
         cursor.execute("""
             SELECT n.* FROM news_raw n
-            LEFT JOIN news_analysis a ON n.news_id = a.news_id
+            LEFT JOIN news_analysis_a a ON n.news_id = a.news_id
             WHERE a.news_id IS NULL
             ORDER BY n.created_at_utc
         """)
@@ -271,7 +390,7 @@ def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list
             
             # Сохраняем результат в базу данных
             if save_to_db:
-                db.save_news_analysis(analysis_result)
+                db.save_news_analysis_a(analysis_result)
                 logger.info(f"Stage A: Результат анализа для новости {news_dict['news_id']} сохранен в БД")
         else:
             logger.warning(f"Stage A: Не удалось проанализировать новость {news_dict['news_id']}")
@@ -288,6 +407,16 @@ def process_all_news_stage_a(limit: int = None, save_to_db: bool = True) -> list
         logger.info(f"Stage A: Обработано {len(results)} новостей из {len(news_items)}")
         logger.info(f"Stage A: Общее время выполнения: {hours}ч {minutes}м {seconds}с")
         logger.info(f"Stage A: Среднее время на новость: {avg_time:.2f} секунд")
+        
+        # Показываем прогноз времени для оставшихся новостей (если есть)
+        remaining_items = len(news_items) - len(results)
+        if remaining_items > 0:
+            estimated_remaining_time = avg_time * remaining_items
+            remaining_hours = int(estimated_remaining_time // 3600)
+            remaining_minutes = int((estimated_remaining_time % 3600) // 60)
+            remaining_seconds = int(estimated_remaining_time % 60)
+            logger.info(f"Stage A: Осталось обработать {remaining_items} новостей " +
+                       f"(примерно {remaining_hours}ч {remaining_minutes}м {remaining_seconds}с)")
     else:
         logger.info(f"Stage A: Новости не были обработаны")
     
@@ -308,7 +437,7 @@ def process_one_news_stage_a(news_id: int, save_to_db: bool = True) -> Optional[
     
     # Создаем таблицу для результатов анализа если её нет
     if save_to_db:
-        db.ensure_news_analysis_table()
+        db.ensure_news_analysis_a_table()
     
     # Получаем новость
     news_dict = dict(db.get_news_by_id(news_id))
@@ -348,7 +477,7 @@ def process_one_news_stage_a(news_id: int, save_to_db: bool = True) -> Optional[
     analysis_result = analyze_one(news_dict)
     
     if analysis_result and save_to_db:
-        db.save_news_analysis(analysis_result)
+        db.save_news_analysis_a(analysis_result)
         logger.info(f"Stage A: Результат анализа для новости {news_id} сохранен в БД")
     
     return analysis_result

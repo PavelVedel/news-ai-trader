@@ -1007,17 +1007,17 @@ class DatabaseConnection:
         out_dict['symbol_info'] = symbol_info_dict
         return out_dict
         
-    def ensure_news_analysis_table(self) -> bool:
+    def ensure_news_analysis_a_table(self) -> bool:
         """
-        Создать таблицу news_analysis если она не существует
+        Создать таблицу news_analysis_a если она не существует
         
         Returns:
             bool: True если успешно, False при ошибке
         """
         try:
             with self.get_cursor() as cursor:
-                # Читаем SQL схему для news_analysis
-                schema_file = Path(__file__).parent / "news_analysis.sql"
+                # Читаем SQL схему для news_analysis_a
+                schema_file = Path(__file__).parent / "news_analysis_a.sql"
                 
                 if schema_file.exists():
                     with open(schema_file, 'r', encoding='utf-8') as f:
@@ -1025,7 +1025,7 @@ class DatabaseConnection:
                     cursor.executescript(schema_sql)
                 else:
                     cursor.execute("""
-                        CREATE TABLE IF NOT EXISTS news_analysis (
+                        CREATE TABLE IF NOT EXISTS news_analysis_a (
                           news_id                     INTEGER PRIMARY KEY REFERENCES news_raw(news_id) ON DELETE CASCADE,
                           created_at_utc                TEXT,
                           headline                    TEXT NOT NULL,
@@ -1040,18 +1040,18 @@ class DatabaseConnection:
                         )
                     """)
                     cursor.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_news_analysis_grounded 
-                        ON news_analysis(is_news_grounded)
+                        CREATE INDEX IF NOT EXISTS idx_news_analysis_a_grounded 
+                        ON news_analysis_a(is_news_grounded)
                     """)
                 
-                print("[OK] Таблица news_analysis создана или уже существует")
+                print("[OK] Таблица news_analysis_a создана или уже существует")
                 return True
                 
         except Exception as e:
-            print(f"Ошибка при создании таблицы news_analysis: {e}")
+            print(f"Ошибка при создании таблицы news_analysis_a: {e}")
             return False
     
-    def save_news_analysis(self, analysis_data: dict) -> bool:
+    def save_news_analysis_a(self, analysis_data: dict) -> bool:
         """
         Сохранить результаты анализа новости в базу данных
         
@@ -1077,7 +1077,7 @@ class DatabaseConnection:
                 }
                 
                 cursor.execute("""
-                    INSERT OR REPLACE INTO news_analysis (
+                    INSERT OR REPLACE INTO news_analysis_a (
                         news_id, created_at_utc, headline, symbols_input,
                         actors, event, symbol_mentions_in_text,
                         symbol_not_mentioned_in_text, unresolved_entities
@@ -1095,7 +1095,7 @@ class DatabaseConnection:
             print(f"Ошибка при сохранении анализа новости {analysis_data.get('news_id')}: {e}")
             return False
     
-    def get_news_analysis(self, news_id: int) -> Optional[dict]:
+    def get_news_analysis_a(self, news_id: int) -> Optional[dict]:
         """
         Получить результаты анализа новости
         
@@ -1108,7 +1108,7 @@ class DatabaseConnection:
         try:
             with self.get_cursor() as cursor:
                 cursor.execute("""
-                    SELECT * FROM news_analysis WHERE news_id = ?
+                    SELECT * FROM news_analysis_a WHERE news_id = ?
                 """, (news_id,))
                 
                 row = cursor.fetchone()
@@ -1142,7 +1142,7 @@ class DatabaseConnection:
         try:
             with self.get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE news_analysis 
+                    UPDATE news_analysis_a 
                     SET is_news_grounded = ? 
                     WHERE news_id = ?
                 """, (1 if is_grounded else 0, news_id))
