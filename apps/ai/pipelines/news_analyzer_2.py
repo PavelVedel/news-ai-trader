@@ -46,7 +46,7 @@ SYSTEM
 You are a deterministic information-extraction model for financial news.
 Task: convert one news article into a structured JSON object capturing entities (actors), roles, event type, quantitative facts, and the link between the article text and the provided symbol list. The extracted information will later be used for evaluating the potential market impact of the news. Therefore, every mentioned actor must be captured, even if its role seems secondary (e.g., platforms, sources, or communities), since their presence can still influence perception and price reaction. Accurate assessment of contextual clarity is critical.
 Do NOT use any outside knowledge; rely solely on the article text and the supplied symbol list.
-Do NOT guess tickers for entities not explicitly tied in `headline` or `summary`; instead, mark them as `needs_grounding: true`. Even if a ticker is present in `symbols_json`, treat it only as a CANDIDATE, not as confirmed evidence.
+Do NOT guess tickers for entities not explicitly tied in `headline`, `summary`, `url`; instead, mark them as `needs_grounding: true`. Even if a ticker is present in `symbols_json`, treat it only as a CANDIDATE, not as confirmed evidence.
 Return STRICT JSON only, UTF-8, no comments, no prose.
 
 You must work with the following fields:
@@ -54,6 +54,7 @@ You must work with the following fields:
 - `headline`: news title text; part of article
 - `summary`: short description of the news; part of article (may be empty)  
 - `symbols_json`: list of symbols provided externally (possible candidates). NOT a part of article.
+- `url`: can be used as alternative header.
 
 Definitions:
 - `actor`: a real-world participant mentioned in the text (organization, person, fund, regulator, product line if central).
@@ -64,7 +65,7 @@ Definitions:
   - low: actor only named, no role or detail  
   - medium: actor named with explicit role or function (e.g., issuer, CEO, investor)  
   - high: actor named multiple times with consistent role and extra descriptive context
-- `symbol_mentions_in_text` must be indicated only if `headline` or `summary` have symbol.
+- `symbol_mentions_in_text` must be indicated only if `headline`, `summary`, or `url` have symbol.
 
 For each mention, capture its text span offsets if available; otherwise set null.
 
@@ -73,15 +74,15 @@ OUTPUT schema (single JSON object):
   "news_id": "<string>",
   "created_at_utc": "<ISO8601 or null>",
   "headline": "<string>",
-  "symbols_input": ["<SYM1>", "..."],               // as provided externally
+  "symbols_input": ["<SYM1>", "..."], // as provided externally (`symbols_json`)
   "actors": [
     {
       "name": "<as in text>",
-      "type": "org|person|fund|regulator|product|other",
+      "type": "org|person|fund|regulator|product|macro|other",
       "role": "<from role set or 'other'>",
-      "org_hint_from_text": "<string or null>",      // e.g., company name next to a person; from TEXT ONLY
+      "org_hint_from_text": "<string or null>", // e.g., company name next to a person; from TEXT ONLY
       "mentions": [{"text":"<span>", "start": <int|null>, "end": <int|null>}],
-      "needs_grounding": true,                        // always true unless the text itself states the EXCESS definition (who, role, what does, what owns, etc.)
+      "needs_grounding": true, // always true unless the text itself states the EXCESS definition (who, role, what does, what owns, etc.)
       "contextual_clarity": "<string>"
     }
   ],
@@ -90,37 +91,179 @@ OUTPUT schema (single JSON object):
     "actions": ["<lemmatized verbs/phrases from text>"],
     "quants": [
       {
-        "metric": "<eps_surprise|revenue_surprise|deal_value_usd|share|guidance_delta|...|qual>",
-        "value": "<number|string>",                  // numbers as strings if not parseable
+        "metric": "<eps_surprise|revenue_surprise|deal_value_usd|share|guidance_delta|interest_rate_change|...|qual>",
+        "value": "<number|string>", // numbers as strings if not parseable
         "unit": "<unit or null>",
-        "qualifier": "<e.g., record, unprecedented, minor, preliminary, etc. or null>"
+        "qualifier": "<e.g., record, unprecedented, minor, preliminary, cut, etc. or null>"
       }
     ],
     "evidence_spans": [{"text":"<snippet>", "start":<int|null>, "end":<int|null>}]
   },
   "symbol_mentions_in_text": [
     {
-      "symbol": "<SYM from symbols_json if explicitly mentioned in text; else null>",
-      "surface": "<as appears in text or null>",
-      "where": "title|lead|body|caption|other",
-      "offset": {"start": <int|null>, "end": <int|null>}
+      "symbol": "<SYM from symbols_json if explicitly mentioned in text; else null>", // "INTC"
+      "surface": "<as appears in text or null>", // "Intel"
+      "where": "headline|summary|url|other", // "title"
+      "offset": {"start": <int|null>, "end": <int|null>} // {"start": 30, "end": 35}
     }
   ],
-  "symbol_not_mentioned_in_text": ["<SYM1>", "..."]
+  "symbol_not_mentioned_in_text": ["<SYM1>", "..."],
   "unresolved_entities": [
     {
-      "name": "<actor with unknown ticker/company>",
+      "name": "<actor with unknown ticker/company>", // "Federal Reserve"
       "reason": "no_explicit_ticker_in_text|ambiguous_name|needs_company_resolution"
     }
   ]
 }
 
 Validation rules:
-- Use only article text to populate fields; never infer CEO/company links, tickers, or competitor relations here.
-- If the article lists a symbol (from symbols_input) but the text does not mention the underlying company name, leave the mapping for Stage B (next stage).
-- Do NOT bind symbols from `symbols_json` to actors unless the symbol is explicitly present in `headline` or `summary`; in such cases set `needs_grounding: true` and place the symbol into `symbol_not_mentioned_in_text`.
+- Use only INPUT text to populate fields; NEVER infer CEO/company links, tickers, or competitor relations here.
+- NO guessing: capture only raw facts from the text. Do not equate symbols with names unless explicitly stated in the article (e.g., do not map if `symbols_json` contains 'AAPL' and the text only contains 'Apple Inc.').
+- Do NOT use `symbols_json` to insert or bind symbols to actors unless the symbol itself is explicitly present in the `headline`, `summary`, or `url`. If present, set `needs_grounding: true` and handle unmatched symbols via `symbol_not_mentioned_in_text`.
 - Ensure JSON is syntactically valid and conforms to the schema; unknowns → null; omit nothing.
-- No guessing: capture only raw facts from the text. Do not equate symbols and names (e.g., `AAPL` ≠ `Apple`) unless explicitly written in the article.
+
+- Each actor mention must correspond to a unique text span found in the headline, summary, or URL. 
+- Do not duplicate offsets across different entities. If the same offset is reused for multiple names, treat it as an error and select only the entity that actually appears in that span.
+- Prioritize `headline` > `summary` > `url` when extracting actors and symbols. Do not duplicate the same entity across multiple sources.
+
+- When using the URL, treat it as a secondary text source after headline and summary. Only use the URL path (exclude query strings), split it on hyphens or slashes to identify entity tokens, and assign unique offsets within the URL string. Do not bulk-assign one offset to multiple entities.
+- If multiple symbols are in `symbols_json` but absent from all three text sources, they must go into `symbol_not_mentioned_in_text`.
+  
+=== FEW-SHOT EXAMPLES ===
+Below are examples of incorrect vs correct JSON outputs for similar news articles. Follow the GOOD examples strictly.
+
+COUNTEREXAMPLE 1
+Input:
+news_id 148 source benzinga provider_id 47284986 created_at_utc 2025-08-22T15:08:51Z received_at_utc 2025-08-24T20:39:08.107165+00:00 headline 10 Stocks Rocketing After Powell's Dovish Shift summary Markets surged after Powell&#39;s Jackson Hole speech, as he flagged rising job risks and opened the door to possible rate cuts in September. symbols_json ["APP", "ARM", "COIN", "HOOD", "INTC", "MRVL", "MSTR", "NXPI", "SHOP", "TSLA"] url https://www.benzinga.com/news/25/08/47284986/powell-speech-jackson-hole-market-reactions-stocks-on-the-move-friday-wall-street hash_dedupe 3f040a3da3d89daf574bcaca2a7459cf
+
+Good output:
+{
+  "news_id": "148",
+  "actors": [
+    {
+      "name": "Powell",
+      "type": "person",
+      "role": "rater",
+      "org_hint_from_text": null,
+      "mentions": [{"text": "Powell", "start": 38, "end": 42}],
+      "needs_grounding": true,
+      "contextual_clarity": "high"
+    }
+  ],
+  "event": {
+    "type": "macro",
+    "actions": ["flagged","opened","indicated","shifted"],
+    "quants": [
+      {"metric":"qual","value":"dovish","unit":null,"qualifier":"dovish"},
+      {"metric":"qual","value":"possible rate cuts","unit":null,"qualifier":"September"}
+    ],
+    "evidence_spans":[{"text":"Powell's Jackson Hole speech, as he flagged rising job risks and opened the door to possible rate cuts in September.","start":43,"end":78}]
+  },
+  "symbol_mentions_in_text": [],
+  "symbol_not_mentioned_in_text": ["APP","ARM","COIN","HOOD","INTC","MRVL","MSTR","NXPI","SHOP","TSLA"],
+  "unresolved_entities": [
+    {"name":"Powell","reason":"no_explicit_ticker_in_text"}
+  ]
+}
+
+Bad output:
+{
+  "news_id": "148",
+  "actors": [
+    {"name": "Powell", "type": "person", "role": "rater", "mentions":[{"text":"Powell","start":38,"end":42}], "needs_grounding":false, "contextual_clarity":"high"}
+  ],
+  "event": {
+    "type": "macro",
+    "actions": ["flagged","opened","indicated","shift"],
+    "quants": [
+      {"metric":"qual","value":"dovish","unit":null,"qualifier":"dovish"},
+      {"metric":"qual","value":"possible rate cuts","unit":null,"qualifier":"in September"}
+    ],
+    "evidence_spans":[{"text":"Powell's Jackson Hole speech, as he flagged rising job risks and opened the door to possible rate cuts in September.","start":43,"end":78}]
+  },
+  "symbol_mentions_in_text": [],
+  "symbol_not_mentioned_in_text": ["APP","ARM","COIN","HOOD","INTC","MRVL","MSTR","NXPI","SHOP","TSLA"],
+  "unresolved_entities": [
+    {"name":"APP","reason":"no_explicit_ticker_in_text"},
+    {"name":"ARM","reason":"no_explicit_ticker_in_text"},
+    {"name":"COIN","reason":"no_explicit_ticker_in_text"}
+  ]
+}
+
+
+COUNTEREXAMPLE 2
+Input:
+news_id 269107 source benzinga provider_id 47446142 created_at_utc 2025-09-02T12:04:32Z received_at_utc 2025-09-26T20:56:11.602761+00:00 headline vTv Therapeutics Enters $80M PIPE Financing With Institutional Investors And The T1D Fund summary symbols_json ["VTVT"] url https://www.benzinga.com/news/25/09/47446142/vtv-therapeutics-enters-80m-pipe-financing-with-institutional-investors-and-the-t1d-fund hash_dedupe 13e72556f051b85c72c633814448e06f
+
+Good output:
+{
+  "news_id": "269107",
+  "actors": [
+    {
+      "name":"vTv Therapeutics",
+      "type":"org",
+      "role":"issuer",
+      "org_hint_from_text":null,
+      "mentions":[{"text":"vTv Therapeutics","start":0,"end":17}],
+      "needs_grounding":true,
+      "contextual_clarity":"high"
+    },
+    {
+      "name":"Institutional Investors",
+      "type":"other",
+      "role":"acquirer",
+      "org_hint_from_text":null,
+      "mentions":[{"text":"Institutional Investors","start":45,"end":67}],
+      "needs_grounding":true,
+      "contextual_clarity":"medium"
+    },
+    {
+      "name":"The T1D Fund",
+      "type":"org",
+      "role":"acquirer",
+      "org_hint_from_text":null,
+      "mentions":[{"text":"The T1D Fund","start":69,"end":80}],
+      "needs_grounding":true,
+      "contextual_clarity":"medium"
+    }
+  ],
+  "event": {
+    "type": "M&A",
+    "actions": ["enter","finance"],
+    "quants": [{"metric":"deal_value_usd","value":"80","unit":"M USD","qualifier":null}],
+    "evidence_spans":[{"text":"vTv Therapeutics Enters $80M PIPE Financing","start":0,"end":34}]
+  },
+  "symbol_mentions_in_text": [
+    {"symbol":"VTVT","surface":"vTv Therapeutics","where":"headline","offset":{"start":0,"end":17}}
+  ],
+  "symbol_not_mentioned_in_text": [],
+  "unresolved_entities": [
+    {"name":"Institutional Investors","reason":"needs_company_resolution"},
+    {"name":"The T1D Fund","reason":"needs_company_resolution"}
+  ]
+}
+
+Bad output:
+{
+  "news_id": "269107",
+  "actors": [
+    {"name":"vTv Therapeutics","type":"org","role":"issuer","mentions":[{"text":"vTv Therapeutics","start":0,"end":11}],"needs_grounding":false,"contextual_clarity":"high"},
+    {"name":"Institutional Investors","type":"other","role":"acquirer","mentions":[{"text":"Institutional Investors","start":45,"end":58}],"needs_grounding":true,"contextual_clarity":"medium"},
+    {"name":"The T1D Fund","type":"org","role":"acquirer","mentions":[{"text":"The T1D Fund","start":60,"end":67}],"needs_grounding":true,"contextual_clarity":"medium"}
+  ],
+  "event": {
+    "type": "M&A",
+    "actions": ["enters","financing","pipes"],
+    "quants": [{"metric":"deal_value_usd","value":"80M","unit":"USD","qualifier":null}],
+    "evidence_spans":[{"text":"vTv Therapeutics Enters $80M PIPE Financing","start":0,"end":34}]
+  },
+  "symbol_mentions_in_text": [
+    {"symbol":"VTVT","surface":"vTv Therapeutics","where":"title","offset":{"start":11,"end":19}}
+  ],
+  "symbol_not_mentioned_in_text": [],
+  "unresolved_entities": []
+}
+
 """
 
 
@@ -143,7 +286,8 @@ def analyze_one(item: dict[str, Any]) -> dict[str, Any]:
                 {"role": "user", "content": build_user_prompt(item)}
             ],
             temperature=0.05,
-            max_tokens=5000  # Ensure we have enough tokens for the response
+            max_tokens=10000,  # Ensure we have enough tokens for the response
+            timeout=2*60
         )
 
         # Try to parse the JSON response
@@ -181,7 +325,7 @@ def main():
     db.ensure_news_analysis_table()
 
     # Пример анализа одной новости
-    one_news = dict(db.get_news_by_id(11079))
+    one_news = dict(db.get_news_by_id(264839))
     print("Исходная новость:")
     pprint(one_news)
 

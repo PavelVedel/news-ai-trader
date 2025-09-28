@@ -15,6 +15,7 @@ def chat_completion(
     repetition_penalty: float | None = None,
     min_p: float = 0.0,
     stream: bool = False,
+    timeout: int = 60,
 ) -> str:
     url = f"{LMSTUDIO_URL}/chat/completions"
 
@@ -34,7 +35,10 @@ def chat_completion(
         payload["repetition_penalty"] = repetition_penalty
 
     headers = {"Authorization": f"Bearer {LMSTUDIO_API_KEY}"}
-    r = requests.post(url, json=payload, headers=headers, timeout=60)
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise Exception(f"Timeout: LMStudio request took too long to complete (more than {timeout} seconds)")
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
