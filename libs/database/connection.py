@@ -70,6 +70,8 @@ class DatabaseConnection:
                 self.ensure_fundamentals_table()
                 # and info table
                 self.ensure_infos_table()
+                # and entities tables
+                self.ensure_entities_tables()
                 
                 return True
                 
@@ -868,6 +870,28 @@ class DatabaseConnection:
             print(f"Ошибка при создании таблицы infos: {e}")
             return False
 
+    def ensure_entities_tables(self) -> bool:
+        """Create entities, aliases, and affiliations tables from entities.sql schema"""
+        try:
+            # Read entities.sql schema
+            entities_schema_file = Path(__file__).parent / "entities.sql"
+            if not entities_schema_file.exists():
+                print(f"Файл схемы entities.sql не найден: {entities_schema_file}")
+                return False
+                
+            with open(entities_schema_file, 'r', encoding='utf-8') as f:
+                entities_sql = f.read()
+            
+            # Execute entities schema
+            with self.get_cursor() as cursor:
+                cursor.executescript(entities_sql)
+                print("Таблицы entities созданы успешно!")
+                
+            return True
+        except Exception as e:
+            print(f"Ошибка при создании таблиц entities: {e}")
+            return False
+
     def save_infos(self, payload: dict) -> bool:
         try:
             with self.get_cursor() as cursor:
@@ -1152,3 +1176,491 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при обновлении статуса заземления для новости {news_id}: {e}")
             return False
+
+    # =========================================================
+    # ENTITY MANAGEMENT METHODS
+    # =========================================================
+    
+    def insert_entity(self, entity_type: str, **fields) -> int:
+        """
+        Insert entity into entities table
+        
+        Args:
+            entity_type: 'org' or 'person'
+            **fields: Entity fields (canonical_full, given, family, etc.)
+            
+        Returns:
+            int: entity_id of inserted entity
+            
+        Raises:
+            Exception: If duplicate found or validation fails
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Validate required fields
+                if entity_type == 'org':
+                    if 'canonical_full' not in fields:
+                        raise Exception("canonical_full is required for org entities")
+                elif entity_type == 'person':
+                    if 'given' not in fields or 'family' not in fields:
+                        raise Exception("given and family are required for person entities")
+                else:
+                    raise Exception(f"Invalid entity_type: {entity_type}")
+                
+                # Check for duplicates
+                if entity_type == 'org':
+                    existing = self.get_entity_by_canonical('org', canonical_full=fields['canonical_full'])
+                    if existing:
+                        raise Exception(f"Organization already exists: {fields['canonical_full']}")
+                elif entity_type == 'person':
+                    existing = self.get_entity_by_canonical('person', given=fields['given'], family=fields['family'])
+                    if existing:
+                        raise Exception(f"Person already exists: {fields['given']} {fields['family']}")
+                
+                # Build INSERT query dynamically
+                field_names = list(fields.keys())
+                placeholders = ', '.join(['?' for _ in field_names])
+                field_list = ', '.join(field_names)
+                
+                query = f"""
+                    INSERT INTO entities (entity_type, {field_list})
+                    VALUES (?, {placeholders})
+                """
+                
+                values = [entity_type] + [fields[f] for f in field_names]
+                cursor.execute(query, values)
+                
+                entity_id = cursor.lastrowid
+                print(f"Entity inserted with ID: {entity_id}")
+                return entity_id
+                
+        except Exception as e:
+            print(f"Ошибка при вставке entity: {e}")
+            raise
+    
+    def insert_alias(self, entity_id: int, alias_text: str, alias_type: str, 
+                    normalized: str, **optional) -> int:
+        """
+        Insert alias into aliases table
+        
+        Args:
+            entity_id: ID of the entity this alias refers to
+            alias_text: Raw alias text (e.g., "AAPL", "Apple Inc.")
+            alias_type: Type of alias ('symbol', 'long_name', 'short_name', etc.)
+            normalized: Normalized version for matching
+            **optional: Optional fields (lang, script, source, confidence, primary_exchange, is_primary)
+            
+        Returns:
+            int: alias_id of inserted alias
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Default values
+                defaults = {
+                    'lang': None,
+                    'script': None,
+                    'source': 'yahoo_finance',
+                    'confidence': 1.0,
+                    'primary_exchange': None,
+                    'is_primary': 0
+                }
+                defaults.update(optional)
+                
+                cursor.execute("""
+                    INSERT INTO aliases (
+                        entity_id, alias_text, alias_type, normalized,
+                        lang, script, source, confidence, primary_exchange, is_primary
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    entity_id, alias_text, alias_type, normalized,
+                    defaults['lang'], defaults['script'], defaults['source'],
+                    defaults['confidence'], defaults['primary_exchange'], defaults['is_primary']
+                ))
+                
+                alias_id = cursor.lastrowid
+                return alias_id
+                
+        except Exception as e:
+            print(f"Ошибка при вставке alias: {e}")
+            raise
+    
+    def insert_affiliation(self, person_id: int, org_id: int, role_title: str, **optional) -> int:
+        """
+        Insert affiliation linking person to organization
+        
+        Args:
+            person_id: ID of person entity
+            org_id: ID of organization entity
+            role_title: Role/title (e.g., "CEO", "SVP & CFO")
+            **optional: Optional fields (symbol_alias_id, valid_from, valid_to, source, confidence)
+            
+        Returns:
+            int: affiliation_id of inserted affiliation
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Default values
+                defaults = {
+                    'symbol_alias_id': None,
+                    'valid_from': None,
+                    'valid_to': None,
+                    'source': 'yahoo_finance',
+                    'confidence': 1.0
+                }
+                defaults.update(optional)
+                
+                cursor.execute("""
+                    INSERT INTO affiliations (
+                        person_id, org_id, role_title, symbol_alias_id,
+                        valid_from, valid_to, source, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    person_id, org_id, role_title, defaults['symbol_alias_id'],
+                    defaults['valid_from'], defaults['valid_to'],
+                    defaults['source'], defaults['confidence']
+                ))
+                
+                affiliation_id = cursor.lastrowid
+                return affiliation_id
+                
+        except Exception as e:
+            print(f"Ошибка при вставке affiliation: {e}")
+            raise
+    
+    def get_entity_by_canonical(self, entity_type: str, canonical_full: str = None, 
+                               given: str = None, family: str = None) -> Optional[dict]:
+        """
+        Check if entity already exists
+        
+        Args:
+            entity_type: 'org' or 'person'
+            canonical_full: For org entities
+            given: For person entities
+            family: For person entities
+            
+        Returns:
+            dict: Full entity row as dict or None
+        """
+        try:
+            with self.get_cursor() as cursor:
+                if entity_type == 'org':
+                    if not canonical_full:
+                        return None
+                    cursor.execute("""
+                        SELECT * FROM entities 
+                        WHERE entity_type = 'org' AND canonical_full = ?
+                    """, (canonical_full,))
+                elif entity_type == 'person':
+                    if not given or not family:
+                        return None
+                    cursor.execute("""
+                        SELECT * FROM entities 
+                        WHERE entity_type = 'person' AND given = ? AND family = ?
+                    """, (given, family))
+                else:
+                    return None
+                
+                row = cursor.fetchone()
+                return dict(row) if row else None
+                
+        except Exception as e:
+            print(f"Ошибка при поиске entity: {e}")
+            return None
+
+    # =========================================================
+    # SEARCH METHODS FOR NEWS ANALYSIS
+    # =========================================================
+    
+    def find_entity_by_symbol(self, symbol: str) -> Optional[dict]:
+        """
+        Search for organization by stock symbol
+        
+        Args:
+            symbol: Stock symbol (e.g., "AAPL")
+            
+        Returns:
+            dict: Entity dict or None
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT e.* FROM entities e 
+                    JOIN aliases a ON e.entity_id = a.entity_id 
+                    WHERE a.alias_type = 'symbol' AND a.normalized = ?
+                """, (symbol.lower(),))
+                
+                row = cursor.fetchone()
+                return dict(row) if row else None
+                
+        except Exception as e:
+            print(f"Ошибка при поиске entity по символу {symbol}: {e}")
+            return None
+    
+    def find_entity_by_alias(self, alias_text: str, fuzzy: bool = False) -> list[dict]:
+        """
+        Search entities by any alias text
+        
+        Args:
+            alias_text: Text to search for
+            fuzzy: If True, use FTS5 for partial matching
+            
+        Returns:
+            list: List of dicts with entity, alias_type, confidence, alias_text
+        """
+        try:
+            with self.get_cursor() as cursor:
+                if fuzzy:
+                    # Use FTS5 for fuzzy matching
+                    cursor.execute("""
+                        SELECT e.*, a.alias_type, a.confidence, a.alias_text
+                        FROM entities e 
+                        JOIN aliases a ON e.entity_id = a.entity_id
+                        JOIN alias_fts fts ON a.alias_id = fts.rowid
+                        WHERE alias_fts MATCH ?
+                        ORDER BY a.confidence DESC
+                    """, (alias_text,))
+                else:
+                    # Exact match on normalized field
+                    normalized = self._normalize_text(alias_text)
+                    cursor.execute("""
+                        SELECT e.*, a.alias_type, a.confidence, a.alias_text
+                        FROM entities e 
+                        JOIN aliases a ON e.entity_id = a.entity_id
+                        WHERE a.normalized = ?
+                        ORDER BY a.confidence DESC
+                    """, (normalized,))
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'entity': dict(row),
+                        'alias_type': row['alias_type'],
+                        'confidence': row['confidence'],
+                        'alias_text': row['alias_text']
+                    })
+                
+                return results
+                
+        except Exception as e:
+            print(f"Ошибка при поиске entity по alias {alias_text}: {e}")
+            return []
+    
+    def find_person_by_name(self, family: str, given: str = None, given_prefix: str = None) -> list[dict]:
+        """
+        Search for persons by name components
+        
+        Args:
+            family: Family name (required)
+            given: Given name (optional)
+            given_prefix: Given name prefix (optional)
+            
+        Returns:
+            list: List of matching person entity dicts
+        """
+        try:
+            with self.get_cursor() as cursor:
+                family_norm = self._normalize_text(family)
+                
+                # Build WHERE clause dynamically
+                where_conditions = ["entity_type = 'person'", "family_norm = ?"]
+                params = [family_norm]
+                
+                if given:
+                    given_norm = self._normalize_text(given)
+                    where_conditions.append("given_norm = ?")
+                    params.append(given_norm)
+                elif given_prefix:
+                    given_prefix_norm = self._normalize_text(given_prefix)
+                    where_conditions.append("given_prefix3 = ?")
+                    params.append(given_prefix_norm)
+                
+                query = f"""
+                    SELECT * FROM entities 
+                    WHERE {' AND '.join(where_conditions)}
+                """
+                
+                cursor.execute(query, params)
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append(dict(row))
+                
+                return results
+                
+        except Exception as e:
+            print(f"Ошибка при поиске person по имени {family}: {e}")
+            return []
+    
+    def find_person_affiliations(self, person_entity_id: int, active_only: bool = True) -> list[dict]:
+        """
+        Get all organizations linked to a person
+        
+        Args:
+            person_entity_id: ID of person entity
+            active_only: If True, filter WHERE valid_to IS NULL
+            
+        Returns:
+            list: List of dicts with org, symbol, role_title, etc.
+        """
+        try:
+            with self.get_cursor() as cursor:
+                where_clause = "WHERE a.person_id = ?"
+                params = [person_entity_id]
+                
+                if active_only:
+                    where_clause += " AND a.valid_to IS NULL"
+                
+                cursor.execute(f"""
+                    SELECT 
+                        e.* as org,
+                        s.alias_text as symbol,
+                        a.role_title,
+                        a.valid_from,
+                        a.valid_to,
+                        a.confidence
+                    FROM affiliations a
+                    JOIN entities e ON a.org_id = e.entity_id
+                    LEFT JOIN aliases s ON a.symbol_alias_id = s.alias_id
+                    {where_clause}
+                    ORDER BY a.confidence DESC
+                """, params)
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'org': dict(row),
+                        'symbol': row['symbol'],
+                        'role_title': row['role_title'],
+                        'valid_from': row['valid_from'],
+                        'valid_to': row['valid_to'],
+                        'confidence': row['confidence']
+                    })
+                
+                return results
+                
+        except Exception as e:
+            print(f"Ошибка при поиске affiliations для person {person_entity_id}: {e}")
+            return []
+    
+    def get_entity_context(self, entity_id: int) -> dict:
+        """
+        Get comprehensive context for an entity
+        
+        Args:
+            entity_id: ID of entity
+            
+        Returns:
+            dict: Structured context with entity, aliases, affiliations
+        """
+        try:
+            with self.get_cursor() as cursor:
+                # Get entity
+                cursor.execute("SELECT * FROM entities WHERE entity_id = ?", (entity_id,))
+                entity_row = cursor.fetchone()
+                if not entity_row:
+                    return {}
+                
+                entity = dict(entity_row)
+                
+                # Get aliases
+                cursor.execute("""
+                    SELECT alias_text, alias_type, is_primary 
+                    FROM aliases 
+                    WHERE entity_id = ? 
+                    ORDER BY is_primary DESC, alias_type
+                """, (entity_id,))
+                
+                aliases = []
+                for row in cursor.fetchall():
+                    aliases.append({
+                        'alias_text': row['alias_text'],
+                        'alias_type': row['alias_type'],
+                        'is_primary': row['is_primary']
+                    })
+                
+                # Get affiliations
+                affiliations = []
+                if entity['entity_type'] == 'org':
+                    # Get affiliated persons
+                    cursor.execute("""
+                        SELECT 
+                            e.* as person,
+                            a.role_title,
+                            a.valid_from,
+                            a.valid_to,
+                            a.confidence
+                        FROM affiliations a
+                        JOIN entities e ON a.person_id = e.entity_id
+                        WHERE a.org_id = ?
+                        ORDER BY a.confidence DESC
+                    """, (entity_id,))
+                    
+                    for row in cursor.fetchall():
+                        affiliations.append({
+                            'person': dict(row),
+                            'role_title': row['role_title'],
+                            'valid_from': row['valid_from'],
+                            'valid_to': row['valid_to'],
+                            'confidence': row['confidence']
+                        })
+                        
+                elif entity['entity_type'] == 'person':
+                    # Get affiliated organizations
+                    cursor.execute("""
+                        SELECT 
+                            e.* as org,
+                            s.alias_text as symbol,
+                            a.role_title,
+                            a.valid_from,
+                            a.valid_to,
+                            a.confidence
+                        FROM affiliations a
+                        JOIN entities e ON a.org_id = e.entity_id
+                        LEFT JOIN aliases s ON a.symbol_alias_id = s.alias_id
+                        WHERE a.person_id = ?
+                        ORDER BY a.confidence DESC
+                    """, (entity_id,))
+                    
+                    for row in cursor.fetchall():
+                        affiliations.append({
+                            'org': dict(row),
+                            'symbol': row['symbol'],
+                            'role_title': row['role_title'],
+                            'valid_from': row['valid_from'],
+                            'valid_to': row['valid_to'],
+                            'confidence': row['confidence']
+                        })
+                
+                return {
+                    'entity': entity,
+                    'aliases': aliases,
+                    'affiliations': affiliations
+                }
+                
+        except Exception as e:
+            print(f"Ошибка при получении context для entity {entity_id}: {e}")
+            return {}
+    
+    def _normalize_text(self, text: str) -> str:
+        """
+        Normalize text using NFKD decomposition, remove diacritics, and convert to lowercase.
+        Helper method for search functionality.
+        """
+        if not text:
+            return ""
+        
+        import unicodedata
+        
+        # NFKD normalization
+        normalized = unicodedata.normalize('NFKD', text)
+        
+        # Remove diacritics (combining characters)
+        without_diacritics = ''.join(
+            char for char in normalized 
+            if not unicodedata.combining(char)
+        )
+        
+        # Convert to lowercase and remove extra whitespace
+        result = without_diacritics.lower().strip()
+        
+        return result

@@ -1,5 +1,5 @@
 -- News analysis table for storing LLM-processed news data
-CREATE TABLE IF NOT EXISTS news_analysis (
+CREATE TABLE IF NOT EXISTS news_analysis_a (
   news_id                     INTEGER PRIMARY KEY REFERENCES news_raw(news_id) ON DELETE CASCADE,
   created_at_utc                TEXT,
   headline                    TEXT NOT NULL,

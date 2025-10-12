@@ -28,7 +28,7 @@ FILTER_BY_CANDLES = True
 # Фильтровать старые записи по времени analyzed_at (CEST)
 # Если включено, скрипт сначала обновит все записи в news_analysis_a,
 # у которых analyzed_at раньше указанного времени
-FILTER_OLD_ANALYSIS = True
+FILTER_OLD_ANALYSIS = False
 FILTER_ANALYSIS_BEFORE = "2025-09-28 12:00:00"  # CEST время
 
 logger = get_logger("news.ai.stage_a")
