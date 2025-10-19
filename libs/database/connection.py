@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from contextlib import contextmanager
 import hashlib
 import json
@@ -1327,8 +1327,8 @@ class DatabaseConnection:
             print(f"Ошибка при вставке affiliation: {e}")
             raise
     
-    def get_entity_by_canonical(self, entity_type: str, canonical_full: str = None, 
-                               given: str = None, family: str = None) -> Optional[dict]:
+    def get_entity_by_canonical(self, entity_type: Literal['org', 'person'], canonical_full: Optional[str] = None, 
+                               given: Optional[str] = None, family: Optional[str] = None) -> Optional[dict]:
         """
         Check if entity already exists
         
@@ -1411,14 +1411,22 @@ class DatabaseConnection:
             with self.get_cursor() as cursor:
                 if fuzzy:
                     # Use FTS5 for fuzzy matching
+                    # cursor.execute("""
+                    #     SELECT e.*, a.alias_type, a.confidence, a.alias_text
+                    #     FROM entities e 
+                    #     JOIN aliases a ON e.entity_id = a.entity_id
+                    #     JOIN alias_fts fts ON a.alias_id = fts.rowid
+                    #     WHERE alias_fts MATCH ?
+                    #     ORDER BY a.confidence DESC
+                    # """, (alias_text,))
                     cursor.execute("""
-                        SELECT e.*, a.alias_type, a.confidence, a.alias_text
+                        SELECT DISTINCT e.*, a.alias_type, a.confidence, a.alias_text
                         FROM entities e 
                         JOIN aliases a ON e.entity_id = a.entity_id
                         JOIN alias_fts fts ON a.alias_id = fts.rowid
                         WHERE alias_fts MATCH ?
-                        ORDER BY a.confidence DESC
-                    """, (alias_text,))
+                        ORDER BY a.confidence DESC, a.is_primary DESC
+                    """, (f'{alias_text}',))  # Кавычки " для точного совпадения, но нам это не нужно
                 else:
                     # Exact match on normalized field
                     normalized = self._normalize_text(alias_text)
@@ -1471,8 +1479,14 @@ class DatabaseConnection:
                     params.append(given_norm)
                 elif given_prefix:
                     given_prefix_norm = self._normalize_text(given_prefix)
-                    where_conditions.append("given_prefix3 = ?")
-                    params.append(given_prefix_norm)
+                    # Если префикс короткий (1-2 символа), ищем по given_initial
+                    if len(given_prefix_norm) <= 2:
+                        where_conditions.append("given_initial = ?")
+                        params.append(given_prefix_norm)
+                    else:
+                        # Если префикс длинный (3+ символов), ищем по given_prefix3
+                        where_conditions.append("given_prefix3 = ?")
+                        params.append(given_prefix_norm)
                 
                 query = f"""
                     SELECT * FROM entities 
@@ -1512,7 +1526,7 @@ class DatabaseConnection:
                 
                 cursor.execute(f"""
                     SELECT 
-                        e.* as org,
+                        e.*,
                         s.alias_text as symbol,
                         a.role_title,
                         a.valid_from,
@@ -1527,8 +1541,14 @@ class DatabaseConnection:
                 
                 results = []
                 for row in cursor.fetchall():
+                    # Создаем словарь для организации из всех полей entity
+                    org_data = {}
+                    for key, value in dict(row).items():
+                        if key not in ['symbol', 'role_title', 'valid_from', 'valid_to', 'confidence']:
+                            org_data[key] = value
+                    
                     results.append({
-                        'org': dict(row),
+                        'org': org_data,
                         'symbol': row['symbol'],
                         'role_title': row['role_title'],
                         'valid_from': row['valid_from'],
@@ -1584,7 +1604,7 @@ class DatabaseConnection:
                     # Get affiliated persons
                     cursor.execute("""
                         SELECT 
-                            e.* as person,
+                            e.*,
                             a.role_title,
                             a.valid_from,
                             a.valid_to,
@@ -1596,8 +1616,14 @@ class DatabaseConnection:
                     """, (entity_id,))
                     
                     for row in cursor.fetchall():
+                        # Создаем словарь для персоны из всех полей entity
+                        person_data = {}
+                        for key, value in dict(row).items():
+                            if key not in ['role_title', 'valid_from', 'valid_to', 'confidence']:
+                                person_data[key] = value
+                        
                         affiliations.append({
-                            'person': dict(row),
+                            'person': person_data,
                             'role_title': row['role_title'],
                             'valid_from': row['valid_from'],
                             'valid_to': row['valid_to'],
@@ -1608,7 +1634,7 @@ class DatabaseConnection:
                     # Get affiliated organizations
                     cursor.execute("""
                         SELECT 
-                            e.* as org,
+                            e.*,
                             s.alias_text as symbol,
                             a.role_title,
                             a.valid_from,
@@ -1622,8 +1648,14 @@ class DatabaseConnection:
                     """, (entity_id,))
                     
                     for row in cursor.fetchall():
+                        # Создаем словарь для организации из всех полей entity
+                        org_data = {}
+                        for key, value in dict(row).items():
+                            if key not in ['symbol', 'role_title', 'valid_from', 'valid_to', 'confidence']:
+                                org_data[key] = value
+                        
                         affiliations.append({
-                            'org': dict(row),
+                            'org': org_data,
                             'symbol': row['symbol'],
                             'role_title': row['role_title'],
                             'valid_from': row['valid_from'],
