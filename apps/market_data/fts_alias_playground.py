@@ -301,6 +301,100 @@ def test_person_context():
                 print(f"  ❌ Ошибка при получении контекста: {e}")
 
 
+def test_organization_context():
+    """Тест получения полного контекста организаций"""
+    print("\n" + "=" * 50)
+    print("ТЕСТ КОНТЕКСТА ОРГАНИЗАЦИЙ")
+    print("=" * 50)
+    
+    with DatabaseConnection() as db:
+        # Тестируем с известными организациями
+        test_orgs = [
+            {"name": "Apple", "entity_id": 183},
+            {"name": "Microsoft", "entity_id": None},  # Найдем по имени
+            {"name": "Tesla", "entity_id": None}       # Найдем по имени
+        ]
+        
+        for org_info in test_orgs:
+            print(f"\n--- Контекст для '{org_info['name']}' ---")
+            
+            try:
+                entity_id = org_info['entity_id']
+                
+                # Если entity_id не указан, ищем по имени
+                if not entity_id:
+                    # Ищем организацию по имени через алиасы
+                    with db.get_cursor() as cursor:
+                        cursor.execute("""
+                            SELECT DISTINCT e.entity_id, e.display_name, e.canonical_full
+                            FROM entities e
+                            JOIN aliases a ON e.entity_id = a.entity_id
+                            WHERE e.entity_type = 'org' 
+                            AND (LOWER(a.alias_text) LIKE LOWER(?) OR LOWER(e.display_name) LIKE LOWER(?))
+                            LIMIT 1
+                        """, (f"%{org_info['name']}%", f"%{org_info['name']}%"))
+                        
+                        result = cursor.fetchone()
+                        if result:
+                            entity_id = result['entity_id']
+                            print(f"Найдена организация: {result['display_name']} (ID: {entity_id})")
+                        else:
+                            print(f"  ✗ Организация '{org_info['name']}' не найдена")
+                            continue
+                
+                if entity_id:
+                    # Получаем полный контекст
+                    context = db.get_entity_context(entity_id)
+                    
+                    if context:
+                        entity = context['entity']
+                        aliases = context['aliases']
+                        affiliations = context['affiliations']
+                        
+                        print(f"Контекст:")
+                        print(f"  Entity ID: {entity['entity_id']}")
+                        print(f"  Type: {entity['entity_type']}")
+                        print(f"  Canonical: {entity['canonical_full']}")
+                        print(f"  Display: {entity['display_name']}")
+                        
+                        # Проверяем long_business_summary
+                        if entity['long_business_summary']:
+                            print(f"  Business Summary:")
+                            print(f"    {entity['long_business_summary']}")
+                        else:
+                            print(f"  Business Summary: НЕТ")
+                        
+                        # Дополнительная информация для организаций
+                        if entity['sector']:
+                            print(f"  Sector: {entity['sector']}")
+                        if entity['industry']:
+                            print(f"  Industry: {entity['industry']}")
+                        if entity['full_time_employees']:
+                            print(f"  Employees: {entity['full_time_employees']:,}")
+                        if entity['website']:
+                            print(f"  Website: {entity['website']}")
+                        
+                        if aliases:
+                            print(f"  Алиасы ({len(aliases)}):")
+                            for alias in aliases[:5]:  # Показываем только первые 5
+                                primary_mark = "⭐" if alias['is_primary'] else "  "
+                                print(f"    {primary_mark} {alias['alias_type']}: {alias['alias_text']}")
+                            if len(aliases) > 5:
+                                print(f"    ... и еще {len(aliases) - 5} алиасов")
+                        
+                        if affiliations:
+                            print(f"  Связанные персоны ({len(affiliations)}):")
+                            for aff in affiliations[:3]:  # Показываем только первые 3
+                                print(f"    - {aff['role_title']}: {aff['person']['given']} {aff['person']['family']}")
+                            if len(affiliations) > 3:
+                                print(f"    ... и еще {len(affiliations) - 3} персон")
+                    else:
+                        print("  ✗ Контекст не найден")
+                        
+            except Exception as e:
+                print(f"  ❌ Ошибка при получении контекста: {e}")
+
+
 def interactive_person_search():
     """Интерактивный поиск персон"""
     print("\n" + "=" * 50)
@@ -483,15 +577,18 @@ def main():
         print("Хотите запустить дополнительные тесты?")
         print("1. Тесты аффилиаций персон")
         print("2. Тесты контекста персон")
-        print("3. Пропустить дополнительные тесты")
+        print("3. Тесты контекста организаций")
+        print("4. Пропустить дополнительные тесты")
         
-        choice = input("\nВыберите опцию (1-3): ").strip()
+        choice = input("\nВыберите опцию (1-4): ").strip()
         
         if choice == '1':
             test_person_affiliations()
         elif choice == '2':
             test_person_context()
         elif choice == '3':
+            test_organization_context()
+        elif choice == '4':
             print("Пропускаем дополнительные тесты")
         else:
             print("Неверный выбор, пропускаем дополнительные тесты")

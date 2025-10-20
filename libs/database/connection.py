@@ -1411,14 +1411,8 @@ class DatabaseConnection:
             with self.get_cursor() as cursor:
                 if fuzzy:
                     # Use FTS5 for fuzzy matching
-                    # cursor.execute("""
-                    #     SELECT e.*, a.alias_type, a.confidence, a.alias_text
-                    #     FROM entities e 
-                    #     JOIN aliases a ON e.entity_id = a.entity_id
-                    #     JOIN alias_fts fts ON a.alias_id = fts.rowid
-                    #     WHERE alias_fts MATCH ?
-                    #     ORDER BY a.confidence DESC
-                    # """, (alias_text,))
+                    # Escape special FTS5 characters to avoid syntax errors
+                    escaped_text = self._escape_fts5_query(alias_text)
                     cursor.execute("""
                         SELECT DISTINCT e.*, a.alias_type, a.confidence, a.alias_text
                         FROM entities e 
@@ -1426,7 +1420,7 @@ class DatabaseConnection:
                         JOIN alias_fts fts ON a.alias_id = fts.rowid
                         WHERE alias_fts MATCH ?
                         ORDER BY a.confidence DESC, a.is_primary DESC
-                    """, (f'{alias_text}',))  # Кавычки " для точного совпадения, но нам это не нужно
+                    """, (escaped_text,))
                 else:
                     # Exact match on normalized field
                     normalized = self._normalize_text(alias_text)
@@ -1696,3 +1690,24 @@ class DatabaseConnection:
         result = without_diacritics.lower().strip()
         
         return result
+    
+    def _escape_fts5_query(self, query: str) -> str:
+        """
+        Escape special FTS5 characters to avoid syntax errors.
+        FTS5 special characters: " ' * + - : ^ ~
+        """
+        if not query:
+            return ""
+        
+        # Escape special FTS5 characters
+        escaped = query.replace('"', '""')  # Double quotes for literal quotes
+        escaped = escaped.replace("'", "''")  # Single quotes for literal quotes
+        escaped = escaped.replace('*', '')   # Remove asterisks
+        escaped = escaped.replace('+', '')   # Remove plus signs
+        escaped = escaped.replace('-', '')   # Remove minus signs
+        escaped = escaped.replace(':', '')   # Remove colons
+        escaped = escaped.replace('^', '')   # Remove carets
+        escaped = escaped.replace('~', '')   # Remove tildes
+        
+        # Wrap in quotes for phrase matching
+        return f'"{escaped}"'
