@@ -44,11 +44,13 @@ def main():
             if res:
                 found_entities[entity['name']] = {key: value for key, value in res[0]['entity'].items() if value is not None and key != 'entity_id'}
                 continue
+            # Person
             if entity['type'] in {'person'}:
                 normalize_named = normalize_name(entity['name'])
                 res = db.find_person_by_name(normalize_named.family_norm, normalize_named.given_norm, normalize_named.given_prefix3)
                 if res:
                     found_entities[entity['name']] = {key: value for key, value in res[0].items() if value is not None and key != 'entity_id'}
+                    continue
             # Else
             not_found_entities[entity['name']] = {"type":entity["type"], "role":entity["role"]}
     
@@ -61,7 +63,7 @@ def main():
     not_found_entities_list = [{"name": name, "type": info.get("type", ""), "role": info.get("role", "")} for name, info in not_found_entities.items()]
     df_not_found = pd.DataFrame(not_found_symbols_list + not_found_entities_list)
     if not df_not_found.empty:
-        df_not_found.to_excel("not_found_entities.xlsx", index=False)
+        df_not_found.to_excel("apps/market_data/not_found_entities.xlsx", index=False)
 
     # ==== BEAUTIFUL STATISTICS ====
     print("\n" + "=" * 60)
@@ -89,8 +91,8 @@ def main():
     print(f"\nExecution time: {execution_time:.2f} seconds")
     print(f"Processing speed: {(total_symbols + total_entities) / execution_time:.1f} items/second")
     
-    print("\nExamples of not found symbols:", ", ".join(list(not_found_symbols)[:5]) or "None")
-    print("Examples of not found entities:", ", ".join(list(not_found_entities)[:5]) or "None")
+    print("\nExamples of not found symbols:", ", ".join(list(not_found_symbols)[:10]) or "None")
+    print("Examples of not found entities:", ", ".join(list(not_found_entities)[:10]) or "None")
 
     print("=" * 60 + "\n")
 

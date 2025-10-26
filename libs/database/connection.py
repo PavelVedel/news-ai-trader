@@ -1711,3 +1711,176 @@ class DatabaseConnection:
         
         # Wrap in quotes for phrase matching
         return f'"{escaped}"'
+
+    # ========== Web Search Cache Functions ==========
+    
+    def ensure_web_search_tables(self) -> bool:
+        """Create web_search_cache table from web_search.sql schema"""
+        try:
+            # Read web_search.sql schema
+            web_search_schema_file = Path(__file__).parent / "web_search.sql"
+            if not web_search_schema_file.exists():
+                print(f"Файл схемы web_search.sql не найден: {web_search_schema_file}")
+                return False
+                
+            with open(web_search_schema_file, 'r', encoding='utf-8') as f:
+                web_search_sql = f.read()
+            
+            # Execute web_search schema
+            with self.get_cursor() as cursor:
+                cursor.executescript(web_search_sql)
+                print("Таблицы web_search_cache созданы успешно!")
+                
+            return True
+        except Exception as e:
+            print(f"Ошибка при создании таблиц web_search: {e}")
+            return False
+
+    def get_cached_search(self, normalized_query: str, provider: Optional[str] = None, fuzzy: bool = False) -> Optional[dict]:
+        """
+        Retrieve cached search result by normalized query
+        If fuzzy=True, uses FTS5 search for flexible matching
+        
+        Args:
+            normalized_query: Normalized query string
+            provider: Optional provider filter ('wikipedia', 'wikidata', etc.)
+            fuzzy: If True, use FTS search for partial matching
+            
+        Returns:
+            Dict with cached result or None if not found
+        """
+        try:
+            with self.get_cursor() as cursor:
+                if fuzzy:
+                    # Use FTS5 for flexible search
+                    if provider:
+                        cursor.execute("""
+                            SELECT c.* FROM web_search_cache c
+                            INNER JOIN web_search_cache_fts fts ON c.id = fts.rowid
+                            WHERE web_search_cache_fts MATCH ? AND c.provider = ?
+                            ORDER BY c.fetched_at_utc DESC
+                            LIMIT 1
+                        """, (normalized_query, provider))
+                    else:
+                        cursor.execute("""
+                            SELECT c.* FROM web_search_cache c
+                            INNER JOIN web_search_cache_fts fts ON c.id = fts.rowid
+                            WHERE web_search_cache_fts MATCH ?
+                            ORDER BY c.fetched_at_utc DESC
+                            LIMIT 1
+                        """, (normalized_query,))
+                else:
+                    # Exact match
+                    if provider:
+                        cursor.execute("""
+                            SELECT * FROM web_search_cache 
+                            WHERE normalized_query = ? AND provider = ?
+                            LIMIT 1
+                        """, (normalized_query, provider))
+                    else:
+                        cursor.execute("""
+                            SELECT * FROM web_search_cache 
+                            WHERE normalized_query = ?
+                            ORDER BY provider DESC
+                            LIMIT 1
+                        """, (normalized_query,))
+                
+                row = cursor.fetchone()
+                if row:
+                    result = dict(row)
+                    result['results'] = json.loads(result['results_json'])
+                    return result
+                return None
+        except Exception as e:
+            print(f"Ошибка при получении кэша для '{normalized_query}': {e}")
+            return None
+
+    def save_search_result(self, provider: str, normalized_query: str, results_json: list, status: str, 
+                          http_code: Optional[int] = None, error: Optional[str] = None, 
+                          backoff_until_utc: Optional[str] = None) -> bool:
+        """
+        Save search result to cache
+        
+        Args:
+            provider: Search provider name ('wikipedia', 'wikidata', etc.)
+            normalized_query: Normalized query string
+            results_json: List of result dicts
+            status: 'ok' | 'empty' | 'error' | 'ratelimited'
+            http_code: HTTP response code if applicable
+            error: Error message if applicable
+            backoff_until_utc: ISO8601 timestamp when to retry after backoff
+        """
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO web_search_cache 
+                    (provider, normalized_query, results_json, status, http_code, error, 
+                     fetched_at_utc, attempts, backoff_until_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """, (
+                    provider,
+                    normalized_query,
+                    json.dumps(results_json),
+                    status,
+                    http_code,
+                    error,
+                    now,
+                    backoff_until_utc
+                ))
+            return True
+        except Exception as e:
+            print(f"Ошибка при сохранении результата поиска для '{normalized_query}': {e}")
+            return False
+
+    def is_provider_in_backoff(self, provider: str) -> bool:
+        """Check if provider is currently in backoff period"""
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT backoff_until_utc FROM web_search_cache 
+                    WHERE provider = ? AND backoff_until_utc IS NOT NULL AND backoff_until_utc > ?
+                    LIMIT 1
+                """, (provider, datetime.now(timezone.utc).isoformat()))
+                row = cursor.fetchone()
+                return row is not None
+        except Exception as e:
+            print(f"Ошибка при проверке backoff для '{provider}': {e}")
+            return False
+
+    def update_search_attempts(self, provider: str, normalized_query: str) -> int:
+        """Increment attempt counter for search and return new value"""
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE web_search_cache 
+                    SET attempts = attempts + 1 
+                    WHERE provider = ? AND normalized_query = ?
+                """, (provider, normalized_query))
+                cursor.execute("""
+                    SELECT attempts FROM web_search_cache 
+                    WHERE provider = ? AND normalized_query = ?
+                """, (provider, normalized_query))
+                row = cursor.fetchone()
+                return row['attempts'] if row else 1
+        except Exception as e:
+            print(f"Ошибка при обновлении attempts для '{normalized_query}': {e}")
+            return 1
+
+    def get_provider_daily_usage(self, provider: str) -> int:
+        """Get count of searches made by provider today (UTC)"""
+        try:
+            today_start = datetime.now(timezone.utc).date().isoformat()
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM web_search_cache 
+                    WHERE provider = ? 
+                    AND fetched_at_utc >= ?
+                    AND status IN ('ok', 'empty')
+                """, (provider, today_start))
+                row = cursor.fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            print(f"Ошибка при получении daily usage для '{provider}': {e}")
+            return 0
