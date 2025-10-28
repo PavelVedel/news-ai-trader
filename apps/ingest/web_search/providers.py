@@ -59,41 +59,84 @@ class WikipediaProvider(SearchProvider):
     
     def search(self, query: str) -> tuple[List[Dict], Optional[int], Optional[str]]:
         """
-        Search Wikipedia using OpenSearch API
+        Search Wikipedia using Main Search API with snippets
         
-        Returns up to 10 results with snippets
+        Returns up to 10 results with snippets containing search context
         """
         try:
             self.rate_limiter.wait_if_needed(self.name, self.rps)
             
-            params = {
-                'action': 'opensearch',
-                'search': query,
+            # Step 1: Search for pages
+            search_params = {
+                'action': 'query',
+                'list': 'search',
+                'srsearch': query,
+                'srlimit': 10,
+                'srnamespace': 0,
                 'format': 'json',
-                'limit': 10,
-                'namespace': 0,  # Main namespace only
             }
             
-            response = requests.get(self.base_url, params=params, timeout=10)
+            headers = {
+                'User-Agent': 'NewsAI-Trader/1.0 (research project; +https://github.com)'
+            }
+            
+            response = requests.get(self.base_url, params=search_params, headers=headers, timeout=10)
             response.raise_for_status()
             
-            # OpenSearch returns [query, [titles], [descriptions], [urls]]
             data = response.json()
-            if len(data) < 4:
+            if 'query' not in data or 'search' not in data['query']:
                 return [], None, None
             
-            titles = data[1]
-            descriptions = data[2]
-            urls = data[3]
+            search_results = data['query']['search']
+            if not search_results:
+                return [], response.status_code, None
             
+            # Step 2: Get extracts for top results
+            # Get extracts for first 5 results only (to minimize API calls)
+            top_pages = search_results[:5]
+            page_titles = [page['title'] for page in top_pages]
+            
+            extract_params = {
+                'action': 'query',
+                'prop': 'extracts',
+                'exintro': '1',  # Get only intro section
+                'exsentences': '5',  # Get first 5 sentences
+                'explaintext': '1',  # Return plain text instead of HTML
+                'titles': '|'.join(page_titles),
+                'format': 'json',
+            }
+            
+            response = requests.get(self.base_url, params=extract_params, headers=headers, timeout=10)
+            response.raise_for_status()
+            extract_data = response.json()
+            
+            # Build results
             results = []
-            for i, (title, desc, url) in enumerate(zip(titles, descriptions, urls)):
-                # Relevance score: higher for first results
+            for i, page in enumerate(search_results):
+                title = page['title']
+                snippet = page.get('snippet', '')
+                
+                # Clean snippet HTML
+                snippet = snippet.replace('<span class="searchmatch">', '').replace('</span>', '').strip()
+                
+                # Try to get extract if available (for top results)
+                if i < len(page_titles) and 'pages' in extract_data.get('query', {}):
+                    pages = extract_data['query']['pages']
+                    for pid, page_data in pages.items():
+                        if page_data.get('title') == title and 'extract' in page_data:
+                            snippet = page_data['extract'].strip()
+                            # explaintext already returns plain text, just normalize whitespace
+                            snippet = ' '.join(snippet.split())
+                            break
+                
+                # Construct URL from title
+                url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                
                 score = 1.0 - (i * 0.1)
                 result = self._make_result(
                     title=title,
                     url=url,
-                    snippet=desc or '',
+                    snippet=snippet,
                     relevance_score=max(0.1, score),
                     wiki_id=None
                 )
@@ -133,7 +176,7 @@ class WikidataProvider(SearchProvider):
             sparql = f"""
             SELECT DISTINCT ?item ?itemLabel ?itemDescription ?article WHERE {{
               {{
-                ?item ?label "{query}"@en .
+                ?item rdfs:label "{query}"@en .
               }}
               UNION
               {{
@@ -151,10 +194,15 @@ class WikidataProvider(SearchProvider):
             LIMIT 10
             """
             
+            headers = {
+                'User-Agent': 'NewsAI-Trader/1.0 (research project; +https://github.com)',
+                'Accept': 'application/sparql-results+json'
+            }
+            
             response = requests.get(
                 self.endpoint,
                 params={'query': sparql, 'format': 'json'},
-                headers={'Accept': 'application/sparql-results+json'},
+                headers=headers,
                 timeout=15
             )
             response.raise_for_status()
@@ -169,14 +217,17 @@ class WikidataProvider(SearchProvider):
                 desc = binding.get('itemDescription', {}).get('value', '')
                 article = binding.get('article', {}).get('value', '')
                 
-                # Use Wikidata URL if no Wikipedia article found
+                # Use Wikipedia URL if available, otherwise Wikidata URL
                 url = article if article else item
+                
+                # If no description, use label as fallback
+                snippet = desc if desc else f"Wikidata entity: {label or item.split('/')[-1]}"
                 
                 score = 1.0 - (i * 0.1)
                 result = self._make_result(
                     title=label or 'Unknown',
                     url=url,
-                    snippet=desc or '',
+                    snippet=snippet,
                     relevance_score=max(0.1, score),
                     wikidata_id=item
                 )

@@ -10,13 +10,22 @@ from apps.ingest.web_search.normalizer import normalize_query
 
 def get_entities_from_excel(excel_path: str) -> list[dict]:
     """Load entities from not_found_entities.xlsx"""
+    import os
     try:
+        if not os.path.exists(excel_path):
+            print(f"ERROR: Excel file not found: {excel_path}")
+            print(f"Current working directory: {os.getcwd()}")
+            print(f"Looking for file at: {os.path.abspath(excel_path)}")
+            return []
+        
         df = pd.read_excel(excel_path)
         entities = df.to_dict('records')
         print(f"Loaded {len(entities)} entities from {excel_path}")
         return entities
     except Exception as e:
         print(f"Error loading Excel file: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -63,7 +72,7 @@ def filter_not_in_cache(entities: list[dict], db: DatabaseConnection, statuses_t
     return not_cached
 
 
-def search_entities(entities: list[dict], manager: WebSearchManager, 
+def search_entities(entities: list[dict], manager: WebSearchManager, db: DatabaseConnection,
                    max_searches: int = None, start_from: int = 0):
     """Search entities that are not in cache"""
     import time
@@ -130,6 +139,30 @@ def search_entities(entities: list[dict], manager: WebSearchManager,
         
         try:
             entity_type = entity.get('type', None)
+            
+            # Check if all providers are in backoff for this entity type
+            if entity_type != 'symbol':
+                # Non-symbols can use all providers
+                providers_to_check = ['wikipedia', 'wikidata', 'duckduckgo']
+            else:
+                # Symbols skip wiki providers
+                providers_to_check = ['duckduckgo']
+            
+            if manager.google_cse:
+                providers_to_check.append('google_cse')
+            
+            all_blocked = True
+            for provider in providers_to_check:
+                # If ANY provider is NOT in backoff, we can try
+                if not db.is_provider_in_backoff(provider):
+                    all_blocked = False
+                    break
+            
+            if all_blocked:
+                print(f"  ⚠️  All available providers are in backoff, skipping for now")
+                stats['error'] += 1
+                continue
+            
             result = manager.search(name, force_refresh=False, entity_type=entity_type)
             
             # Track task time
@@ -165,7 +198,9 @@ def search_entities(entities: list[dict], manager: WebSearchManager,
             
             if result['results']:
                 first = result['results'][0]
-                print(f"  Top result: {first['title'][:60]}...")
+                print(f"  Top result: {first['title'][:80]}")
+                if first.get('snippet'):
+                    print(f"  Top snippet: {first['snippet'][:200]}...")
             else:
                 print(f"  No results found from {result['provider']}")
         except Exception as e:
@@ -213,6 +248,44 @@ def search_entities(entities: list[dict], manager: WebSearchManager,
     print("=" * 60)
 
 
+def check_backoff_status(db: DatabaseConnection):
+    """Check which providers are in backoff"""
+    from datetime import datetime, timezone
+    
+    providers = ['wikipedia', 'wikidata', 'duckduckgo', 'google_cse']
+    in_backoff = []
+    
+    for provider in providers:
+        if db.is_provider_in_backoff(provider):
+            # Get backoff until time
+            with db.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT backoff_until_utc FROM web_search_cache 
+                    WHERE provider = ? AND backoff_until_utc IS NOT NULL
+                    LIMIT 1
+                """, (provider,))
+                row = cursor.fetchone()
+                if row:
+                    backoff_until = row[0]
+                    try:
+                        backoff_dt = datetime.fromisoformat(backoff_until)
+                        now = datetime.now(timezone.utc).replace(tzinfo=None)
+                        if backoff_dt > now:
+                            remaining = (backoff_dt - now).total_seconds() / 60  # minutes
+                            in_backoff.append((provider, backoff_until, remaining))
+                    except:
+                        pass
+    
+    if in_backoff:
+        print("\n⚠️  Providers in backoff:")
+        for provider, until, remaining_mins in in_backoff:
+            print(f"  - {provider}: until {until} ({remaining_mins:.1f} min remaining)")
+    else:
+        print("\n✓ No providers in backoff")
+    
+    return in_backoff
+
+
 def main():
     import argparse
     
@@ -229,12 +302,22 @@ def main():
     parser.add_argument('--retry-statuses', type=str, nargs='+',
                        default=[],
                        help='Retry entities with these cached statuses (default: skip all cached)')
+    parser.add_argument('--check-backoff', action='store_true',
+                       help='Check backoff status of providers and exit')
     
     args = parser.parse_args()
     
     # Initialize database
     db = DatabaseConnection()
     db.ensure_web_search_tables()
+    
+    # Check backoff status if requested
+    if args.check_backoff:
+        check_backoff_status(db)
+        return
+    
+    # Check backoff status before starting
+    backoff_status = check_backoff_status(db)
     
     # Load entities
     entities = get_entities_from_excel(args.excel)
@@ -253,7 +336,7 @@ def main():
     
     # Perform searches
     manager = WebSearchManager(db)
-    search_entities(entities, manager, args.max_searches, args.start_from)
+    search_entities(entities, manager, db, args.max_searches, args.start_from)
     
     print("\nDone!")
 

@@ -1884,3 +1884,30 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении daily usage для '{provider}': {e}")
             return 0
+    
+    def get_recent_empty_count(self, provider: str, minutes: int = 30) -> int:
+        """
+        Count how many empty responses this provider has returned in recent time
+        
+        Args:
+            provider: Provider name
+            minutes: Time window in minutes to look back
+        
+        Returns:
+            Number of consecutive empty responses
+        """
+        try:
+            cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM web_search_cache 
+                    WHERE provider = ? 
+                    AND fetched_at_utc >= ?
+                    AND status = 'empty'
+                    ORDER BY fetched_at_utc DESC
+                """, (provider, cutoff_time))
+                row = cursor.fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            print(f"Ошибка при подсчете пустых ответов для '{provider}': {e}")
+            return 0

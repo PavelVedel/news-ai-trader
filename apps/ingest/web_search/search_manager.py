@@ -100,21 +100,29 @@ class WebSearchManager:
         """
         Cascade through search providers until we get results
         
-        Order: Wikipedia → Wikidata → DuckDuckGo → Google CSE (rare)
+        Provider order: DuckDuckGo → Google CSE → Wikidata → Wikipedia
+        Financial/business queries work better with DuckDuckGo and Google CSE
         
         Args:
             normalized_query: Normalized search query
             entity_type: Type of entity to determine which providers to use
         """
+        # Provider order: DuckDuckGo, Google CSE, Wikipedia, Wikidata
+        # Wikipedia has better snippets (5 sentences), Wikidata has short descriptions
         providers = [
-            (self.wikipedia, 'wikipedia'),
-            (self.wikidata, 'wikidata'),
             (self.duckduckgo, 'duckduckgo'),
         ]
         
-        # Add Google CSE if available
+        # Add Google CSE if available (second priority)
         if self.google_cse:
             providers.append((self.google_cse, 'google_cse'))
+        
+        # Add Wikipedia and Wikidata as fallback
+        # Wikipedia prioritized over Wikidata because of longer snippets
+        providers.extend([
+            (self.wikipedia, 'wikipedia'),
+            (self.wikidata, 'wikidata'),
+        ])
         
         # Skip wiki providers for symbols (they don't work well for stock symbols)
         if entity_type == 'symbol':
@@ -170,6 +178,27 @@ class WebSearchManager:
             elif not results:
                 status = 'empty'
                 failed_providers.append({'name': name, 'reason': 'empty'})
+                
+                # Check for consecutive empty responses from DuckDuckGo
+                # If multiple empty responses in recent time, it might be temporarily blocked
+                if name == 'duckduckgo':
+                    recent_empty = self.db.get_recent_empty_count('duckduckgo', minutes=30)
+                    if recent_empty >= 3:
+                        # Multiple empty responses - likely temporary block
+                        # Set short backoff (5 minutes) to let it recover
+                        print(f"  DuckDuckGo returned {recent_empty} empty responses in last 30 min, setting short backoff")
+                        self._set_backoff(name, delay_minutes=5)
+                        backoff_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+                        self.db.save_search_result(
+                            provider=name,
+                            normalized_query=normalized_query,
+                            results_json=[],
+                            status='empty',
+                            http_code=http_code,
+                            error=None,
+                            backoff_until_utc=backoff_until
+                        )
+                        continue  # Skip to next provider
             else:
                 status = 'ok'
             
@@ -200,9 +229,19 @@ class WebSearchManager:
             'failed_providers': failed_providers
         }
     
-    def _set_backoff(self, provider: str, exponential: bool = False, attempts: int = 1):
-        """Set backoff period for provider"""
-        if exponential:
+    def _set_backoff(self, provider: str, exponential: bool = False, attempts: int = 1, delay_minutes: Optional[int] = None):
+        """
+        Set backoff period for provider
+        
+        Args:
+            provider: Provider name
+            exponential: Use exponential backoff
+            attempts: Number of attempts (for exponential backoff)
+            delay_minutes: Custom delay in minutes (overrides other options)
+        """
+        if delay_minutes is not None:
+            delay = delay_minutes
+        elif exponential:
             # Exponential backoff: 2^attempts * base_delay
             delay = min(
                 (2 ** attempts) * BACKOFF_BASE_DELAY_MINUTES,

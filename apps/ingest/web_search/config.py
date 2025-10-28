@@ -20,8 +20,8 @@ GOOGLE_CSE_ID: Optional[str] = os.getenv('GOOGLE_CUSTOM_SEARCH_ENGINE_ID')
 
 # Provider rate limits (requests per second)
 PROVIDER_RATE_LIMITS = {
-    'wikipedia': 0.5,  # 0.5 RPS (2 sec intervals)
-    'wikidata': 0.5,   # 0.5 RPS
+    'wikipedia': 0.3,  # 0.5 RPS (2 sec intervals)
+    'wikidata': 0.3,   # 0.5 RPS
     'duckduckgo': 0.1,  # 0.1 RPS (10 sec intervals, more conservative)
     'google_cse': 0.1,   # Very conservative, 100 queries/day limit
 }
