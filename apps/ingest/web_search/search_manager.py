@@ -1,12 +1,12 @@
 """Web search manager with cache integration and provider cascade"""
 
-import json
+import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
 
 from libs.database.connection import DatabaseConnection
 from apps.ingest.web_search.normalizer import normalize_query
-from apps.ingest.web_search.rate_limiter import RateLimiter, RateLimitError
+from apps.ingest.web_search.rate_limiter import RateLimiter
 from apps.ingest.web_search.providers import (
     WikipediaProvider,
     WikidataProvider,
@@ -70,10 +70,10 @@ class WebSearchManager:
         normalized = normalize_query(query)
         
         # Check cache first (unless force_refresh)
-        # Only return cached if it's a valid result (not pending/error)
+        # Only return cached if it's a valid result (filter out empty/error/ratelimited)
         if not force_refresh:
-            cached = self.db.get_cached_search(normalized, fuzzy=fuzzy)
-            if cached and cached['status'] not in ('pending', 'error'):
+            cached = self.db.get_cached_search(normalized, fuzzy=fuzzy, filter_empty=True)
+            if cached:
                 # Valid cached result - return it
                 return {
                     'query': query,
@@ -260,4 +260,214 @@ class WebSearchManager:
                 SET backoff_until_utc = ? 
                 WHERE provider = ? AND backoff_until_utc IS NULL
             """, (backoff_until, provider))
+    
+    def check_backoff_status(self):
+        """Check which providers are in backoff"""
+        providers = ['wikipedia', 'wikidata', 'duckduckgo', 'google_cse']
+        in_backoff = []
+        
+        for provider in providers:
+            if self.db.is_provider_in_backoff(provider):
+                # Get backoff until time
+                with self.db.get_cursor() as cursor:
+                    cursor.execute("""
+                        SELECT backoff_until_utc FROM web_search_cache 
+                        WHERE provider = ? AND backoff_until_utc IS NOT NULL
+                        LIMIT 1
+                    """, (provider,))
+                    row = cursor.fetchone()
+                    if row:
+                        backoff_until = row[0]
+                        try:
+                            backoff_dt = datetime.fromisoformat(backoff_until)
+                            now = datetime.now(timezone.utc).replace(tzinfo=None)
+                            if backoff_dt > now:
+                                remaining = (backoff_dt - now).total_seconds() / 60  # minutes
+                                in_backoff.append((provider, backoff_until, remaining))
+                        except:
+                            pass
+        
+        if in_backoff:
+            print("\n⚠️  Providers in backoff:")
+            for provider, until, remaining_mins in in_backoff:
+                print(f"  - {provider}: until {until} ({remaining_mins:.1f} min remaining)")
+        else:
+            print("\n✓ No providers in backoff")
+        
+        return in_backoff
+    
+    def search_batch(self, entities: List[Dict[str, Any]], max_searches: Optional[int] = None, start_from: int = 0):
+        """
+        Search multiple entities in batch with progress tracking and statistics
+        
+        Args:
+            entities: List of entity dictionaries with 'name', 'type', 'role' keys
+            max_searches: Maximum number of searches to perform (None = all)
+            start_from: Start from this index (useful for resuming)
+            
+        Returns:
+            Dictionary with statistics about the batch search
+        """
+        total = len(entities)
+        max_searches = max_searches or total
+        
+        print(f"\nStarting search for {min(max_searches, total)} entities...")
+        print(f"Starting from index {start_from}")
+        
+        # Track statistics
+        stats = {
+            'total': 0,
+            'success': 0,
+            'empty': 0,
+            'error': 0,
+            'by_provider': {},
+            'failed_searches': []
+        }
+        
+        # Time tracking
+        start_time = time.time()
+        task_times = []  # Track time for each task
+        
+        end_index = min(start_from + max_searches, total)
+        entities_to_search = entities[start_from:end_index]
+        
+        def format_time(seconds):
+            """Format time in human-readable format"""
+            if seconds < 60:
+                return f"{int(seconds)}s"
+            elif seconds < 3600:
+                return f"{int(seconds / 60)}m {int(seconds % 60)}s"
+            else:
+                return f"{int(seconds / 3600)}h {int((seconds % 3600) / 60)}m"
+        
+        for i, entity in enumerate(entities_to_search, start=start_from):
+            task_start = time.time()
+            
+            name = entity.get('name', '').strip()
+            if not name:
+                continue
+            
+            stats['total'] += 1
+            
+            # Calculate elapsed time and ETA
+            elapsed_time = time.time() - start_time
+            remaining = total - stats['total'] + 1
+            
+            if task_times:
+                fastest_time = min(task_times)
+                slowest_time = max(task_times)
+                eta_best = fastest_time * remaining
+                eta_worst = slowest_time * remaining
+            else:
+                eta_best = eta_worst = 0
+            
+            print(f"\n[{i+1}/{total}] Searching: {name}")
+            print(f"  Type: {entity.get('type', 'unknown')}, Role: {entity.get('role', 'unknown')}")
+            print(f"  Elapsed: {format_time(elapsed_time)} | Remaining: {remaining} tasks")
+            if task_times:
+                print(f"  ETA (best/worst): {format_time(eta_best)} / {format_time(eta_worst)}")
+            
+            try:
+                entity_type = entity.get('type', None)
+                
+                # Check if all providers are in backoff for this entity type
+                if entity_type != 'symbol':
+                    # Non-symbols can use all providers
+                    providers_to_check = ['wikipedia', 'wikidata', 'duckduckgo']
+                else:
+                    # Symbols skip wiki providers
+                    providers_to_check = ['duckduckgo']
+                
+                if self.google_cse:
+                    providers_to_check.append('google_cse')
+                
+                all_blocked = True
+                for provider in providers_to_check:
+                    # If ANY provider is NOT in backoff, we can try
+                    if not self.db.is_provider_in_backoff(provider):
+                        all_blocked = False
+                        break
+                
+                if all_blocked:
+                    print(f"  ⚠️  All available providers are in backoff, skipping for now")
+                    stats['error'] += 1
+                    continue
+                
+                result = self.search(name, force_refresh=False, entity_type=entity_type)
+                
+                # Track task time
+                task_time = time.time() - task_start
+                task_times.append(task_time)
+                
+                # Update statistics
+                stats['by_provider'][result['provider']] = stats['by_provider'].get(result['provider'], 0) + 1
+                
+                status = result['status']
+                if status == 'ok':
+                    stats['success'] += 1
+                elif status == 'empty':
+                    stats['empty'] += 1
+                else:
+                    stats['error'] += 1
+                    stats['failed_searches'].append({
+                        'name': name,
+                        'provider': result['provider'],
+                        'status': status,
+                        'results_count': len(result['results'])
+                    })
+                
+                print(f"  Status: {status}")
+                print(f"  Provider: {result['provider']}")
+                print(f"  Results found: {len(result['results'])}")
+                
+                # Show failed providers if any
+                if 'failed_providers' in result and result['failed_providers']:
+                    failed = result['failed_providers']
+                    failed_names = [f"{f['name']} ({f['reason']})" for f in failed]
+                    print(f"  Failed providers: {', '.join(failed_names)}")
+                
+                if result['results']:
+                    first = result['results'][0]
+                    print(f"  Top result: {first['title'][:80]}")
+                    if first.get('snippet'):
+                        print(f"  Top snippet: {first['snippet'][:200]}...")
+                else:
+                    print(f"  No results found from {result['provider']}")
+            except Exception as e:
+                stats['error'] += 1
+                stats['failed_searches'].append({
+                    'name': name,
+                    'error': str(e)
+                })
+                print(f"  Error: {e}")
+        
+        # Print statistics summary
+        total_time = time.time() - start_time
+        
+        print("\n" + "=" * 60)
+        print("SEARCH STATISTICS SUMMARY")
+        print("=" * 60)
+        print(f"Total searches: {stats['total']}")
+        print(f"Total time: {format_time(total_time)}")
+        print(f"Average time per search: {format_time(total_time / stats['total']) if stats['total'] > 0 else 'N/A'}")
+        print(f"Successful (with results): {stats['success']}")
+        print(f"Empty (no results): {stats['empty']}")
+        print(f"Errors: {stats['error']}")
+        print(f"\nBy provider:")
+        for provider, count in sorted(stats['by_provider'].items(), key=lambda x: -x[1]):
+            print(f"  {provider:15} {count:4} searches")
+        
+        if stats['failed_searches']:
+            print(f"\nFailed searches ({len(stats['failed_searches'])}):")
+            for failed in stats['failed_searches'][:10]:  # Show first 10
+                if 'error' in failed:
+                    print(f"  - {failed['name']}: {failed['error']}")
+                else:
+                    print(f"  - {failed['name']}: {failed['provider']} returned {failed['status']}")
+            if len(stats['failed_searches']) > 10:
+                print(f"  ... and {len(stats['failed_searches']) - 10} more")
+        
+        print("=" * 60)
+        
+        return stats
 

@@ -1,6 +1,15 @@
 from __future__ import annotations
 import os, requests, json
 from typing import Any
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Загружаем .env файл из корня проекта (for batch scripts)
+project_root = Path(__file__).parent.parent.parent.parent
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"Loaded .env from {env_path}")
 
 LMSTUDIO_URL   = os.getenv("LMSTUDIO_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "")

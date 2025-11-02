@@ -1,10 +1,10 @@
 import sqlite3
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, List, Dict, Any
 from contextlib import contextmanager
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 class DatabaseConnection:
     def __init__(self, db_path: str = "data/db/news.db"):
@@ -18,9 +18,13 @@ class DatabaseConnection:
             db_dir = Path(self.db_path).parent
             db_dir.mkdir(parents=True, exist_ok=True)
             
-            self._connection = sqlite3.connect(self.db_path)
+            self._connection = sqlite3.connect(self.db_path, timeout=30)
             self._connection.row_factory = sqlite3.Row  # Для удобного доступа к колонкам
             
+            self._connection.execute("PRAGMA journal_mode=WAL;")
+            self._connection.execute("PRAGMA synchronous=NORMAL;")
+            self._connection.execute("PRAGMA busy_timeout=30000;")  # 30 секунд
+            # self._connection.execute("PRAGMA foreign_keys=ON;")
         return self._connection
     
     @contextmanager
@@ -1736,7 +1740,8 @@ class DatabaseConnection:
             print(f"Ошибка при создании таблиц web_search: {e}")
             return False
 
-    def get_cached_search(self, normalized_query: str, provider: Optional[str] = None, fuzzy: bool = False) -> Optional[dict]:
+    def get_cached_search(self, normalized_query: str, provider: Optional[str] = None, fuzzy: bool = False, 
+                         filter_empty: bool = False) -> Optional[dict]:
         """
         Retrieve cached search result by normalized query
         If fuzzy=True, uses FTS5 search for flexible matching
@@ -1745,9 +1750,10 @@ class DatabaseConnection:
             normalized_query: Normalized query string
             provider: Optional provider filter ('wikipedia', 'wikidata', etc.)
             fuzzy: If True, use FTS search for partial matching
+            filter_empty: If True, filter out results with status 'empty', 'error', or 'ratelimited'
             
         Returns:
-            Dict with cached result or None if not found
+            Dict with cached result or None if not found (or filtered out)
         """
         try:
             with self.get_cursor() as cursor:
@@ -1758,7 +1764,9 @@ class DatabaseConnection:
                             SELECT c.* FROM web_search_cache c
                             INNER JOIN web_search_cache_fts fts ON c.id = fts.rowid
                             WHERE web_search_cache_fts MATCH ? AND c.provider = ?
-                            ORDER BY c.fetched_at_utc DESC
+                            ORDER BY 
+                                CASE WHEN c.status = 'ok' AND c.results_json != '[]' THEN 0 ELSE 1 END,
+                                c.fetched_at_utc DESC
                             LIMIT 1
                         """, (normalized_query, provider))
                     else:
@@ -1766,22 +1774,29 @@ class DatabaseConnection:
                             SELECT c.* FROM web_search_cache c
                             INNER JOIN web_search_cache_fts fts ON c.id = fts.rowid
                             WHERE web_search_cache_fts MATCH ?
-                            ORDER BY c.fetched_at_utc DESC
+                            ORDER BY 
+                                CASE WHEN c.status = 'ok' AND c.results_json != '[]' THEN 0 ELSE 1 END,
+                                c.fetched_at_utc DESC
                             LIMIT 1
                         """, (normalized_query,))
                 else:
-                    # Exact match
+                    # Exact match - prioritize results with status='ok' and non-empty results
                     if provider:
                         cursor.execute("""
                             SELECT * FROM web_search_cache 
                             WHERE normalized_query = ? AND provider = ?
+                            ORDER BY 
+                                CASE WHEN status = 'ok' AND results_json != '[]' THEN 0 ELSE 1 END,
+                                fetched_at_utc DESC
                             LIMIT 1
                         """, (normalized_query, provider))
                     else:
                         cursor.execute("""
                             SELECT * FROM web_search_cache 
                             WHERE normalized_query = ?
-                            ORDER BY provider DESC
+                            ORDER BY 
+                                CASE WHEN status = 'ok' AND results_json != '[]' THEN 0 ELSE 1 END,
+                                fetched_at_utc DESC
                             LIMIT 1
                         """, (normalized_query,))
                 
@@ -1789,11 +1804,73 @@ class DatabaseConnection:
                 if row:
                     result = dict(row)
                     result['results'] = json.loads(result['results_json'])
+                    
+                    # Filter out empty/invalid results if requested
+                    if filter_empty and result.get('status') in ('empty', 'error', 'ratelimited'):
+                        return None
+                    
                     return result
                 return None
         except Exception as e:
             print(f"Ошибка при получении кэша для '{normalized_query}': {e}")
             return None
+
+    def get_all_cached_searches(self, normalized_query: str, fuzzy: bool = False, 
+                               filter_empty: bool = True) -> List[Dict[str, Any]]:
+        """
+        Retrieve all cached search results for normalized query from all providers
+        
+        Args:
+            normalized_query: Normalized query string
+            fuzzy: If True, use FTS search for partial matching
+            filter_empty: If True, filter out empty/error results
+            
+        Returns:
+            List of cached results, ordered by priority (ok with results > empty > error)
+            Each result is a dict with 'provider', 'results', 'status', etc.
+        """
+        try:
+            with self.get_cursor() as cursor:
+                if fuzzy:
+                    cursor.execute("""
+                        SELECT c.* FROM web_search_cache c
+                        INNER JOIN web_search_cache_fts fts ON c.id = fts.rowid
+                        WHERE web_search_cache_fts MATCH ?
+                        ORDER BY 
+                            CASE 
+                                WHEN c.status = 'ok' AND c.results_json != '[]' THEN 0
+                                WHEN c.status = 'empty' THEN 1
+                                ELSE 2
+                            END,
+                            c.fetched_at_utc DESC
+                    """, (normalized_query,))
+                else:
+                    cursor.execute("""
+                        SELECT * FROM web_search_cache 
+                        WHERE normalized_query = ?
+                        ORDER BY 
+                            CASE 
+                                WHEN status = 'ok' AND results_json != '[]' THEN 0
+                                WHEN status = 'empty' THEN 1
+                                ELSE 2
+                            END,
+                            fetched_at_utc DESC
+                    """, (normalized_query,))
+                
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    result['results'] = json.loads(result['results_json'])
+                    
+                    if filter_empty and result.get('status') in ('empty', 'error', 'ratelimited'):
+                        continue
+                    
+                    results.append(result)
+                
+                return results
+        except Exception as e:
+            print(f"Ошибка при получении всех кэшей для '{normalized_query}': {e}")
+            return []
 
     def save_search_result(self, provider: str, normalized_query: str, results_json: list, status: str, 
                           http_code: Optional[int] = None, error: Optional[str] = None, 
