@@ -115,6 +115,9 @@ CREATE INDEX IF NOT EXISTS idx_aff_person ON affiliations(person_id);
 CREATE INDEX IF NOT EXISTS idx_aff_org ON affiliations(org_id);
 CREATE INDEX IF NOT EXISTS idx_aff_symbolalias ON affiliations(symbol_alias_id);
 
+-- Prevent duplicate affiliations
+CREATE UNIQUE INDEX IF NOT EXISTS uq_affiliation_unique ON affiliations(person_id, org_id, role_title);
+
 
 
 -- =========================================================

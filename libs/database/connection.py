@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import Optional, Literal, List, Dict, Any
+from typing import Optional, Literal, List, Dict, Any, get_origin
 from contextlib import contextmanager
 import hashlib
 import json
@@ -647,7 +647,7 @@ class DatabaseConnection:
             print(f"Ошибка при сохранении данных для {fundamentals.get('symbol', 'unknown')}: {e}")
             return False
     
-    def get_fundamentals(self, symbol: str) -> Optional[dict]:
+    def get_fundamentals(self, symbol: str, remove_none_fields: bool = False) -> Optional[dict]:
         """
         Получить фундаментальные данные для символа
         
@@ -665,7 +665,11 @@ class DatabaseConnection:
                 
                 row = cursor.fetchone()
                 if row:
-                    return dict(row)
+                    if remove_none_fields:
+                        return  {key: value for key, value in dict(row).items() if value is not None}
+
+                    else:
+                        return dict(row)
                 return None
                 
         except Exception as e:
@@ -890,6 +894,16 @@ class DatabaseConnection:
             with self.get_cursor() as cursor:
                 cursor.executescript(entities_sql)
                 print("Таблицы entities созданы успешно!")
+                
+                # Ensure UNIQUE constraint exists for affiliations (for existing databases)
+                try:
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_affiliation_unique 
+                        ON affiliations(person_id, org_id, role_title)
+                    """)
+                except Exception as e:
+                    # Index might already exist, ignore error
+                    pass
                 
             return True
         except Exception as e:
@@ -1155,7 +1169,85 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при получении анализа новости {news_id}: {e}")
             return None
-    
+
+    @staticmethod
+    def parse_news_analysis_a_row(row: dict[str, Any]) -> dict[str, Any]:
+        """
+        Parses a row from news_analysis_a into typed Python objects
+        """
+        parsed = {}
+        
+        # Simple fields
+        parsed['news_id'] = int(row['news_id'])
+        parsed['headline'] = str(row['headline'])
+        parsed['is_news_grounded'] = bool(row['is_news_grounded'])
+        
+        # JSON fields with typing
+        json_fields = {
+            'symbols_input': list[str],
+            'actors': list[dict[str, Any]],
+            'event': dict[str, Any],
+            'symbol_mentions_in_text': list[dict[str, Any]],
+            'symbol_not_mentioned_in_text': list[str],
+            'unresolved_entities': list[dict[str, Any]]
+        }
+        
+        for field, expected_type in json_fields.items():
+            if row.get(field):
+                try:
+                    parsed[field] = json.loads(row[field])
+                    # Get base type from parameterized type
+                    base_type = get_origin(expected_type) or expected_type
+                    if not isinstance(parsed[field], base_type):
+                        print(f"Warning: {field} expected {base_type}, got {type(parsed[field])}")
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error for {field}: {e}")
+                    parsed[field] = None
+            else:
+                parsed[field] = [] if expected_type == list else {}
+        
+        # Datetime fields
+        for field in ['created_at_utc', 'analyzed_at']:
+            if row.get(field):
+                parsed[field] = DatabaseConnection.parse_datetime(row[field])
+            else:
+                parsed[field] = None
+        return parsed
+
+    @staticmethod
+    def parse_datetime(date_str: str) -> Optional[datetime]:
+        """Parses various date formats"""
+        if not date_str:
+            return None
+            
+        try:
+            # ISO format with Z
+            if date_str.endswith('Z'):
+                return datetime.fromisoformat(date_str[:-1] + '+00:00')
+            # ISO format without timezone
+            elif 'T' in date_str:
+                return datetime.fromisoformat(date_str)
+            # SQLite datetime format
+            else:
+                return datetime.fromisoformat(date_str)
+        except ValueError:
+            return None
+
+    def iterate_news_analysis_a(self):
+        """
+        Generator for lazy iteration over parsed data
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM news_analysis_a ORDER BY analyzed_at DESC")
+            for row in cursor:
+                yield DatabaseConnection.parse_news_analysis_a_row(dict(row))
+
+    def get_total_news_analysis_a(self) -> int:
+        """Получить общее количество новостей в news_analysis_a"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM news_analysis_a")
+            return cursor.fetchone()[0]
+
     def update_news_grounding(self, news_id: int, is_grounded: bool = True) -> bool:
         """
         Обновить статус заземления (grounding) для новости
@@ -1285,12 +1377,17 @@ class DatabaseConnection:
                 return alias_id
                 
         except Exception as e:
-            print(f"Ошибка при вставке alias: {e}")
+            # Don't print error for UNIQUE constraint violations (duplicate aliases)
+            # This is expected behavior when trying to insert existing aliases
+            error_str = str(e)
+            if 'UNIQUE constraint' not in error_str and 'constraint failed' not in error_str:
+                print(f"Ошибка при вставке alias: {e}")
             raise
     
-    def insert_affiliation(self, person_id: int, org_id: int, role_title: str, **optional) -> int:
+    def insert_affiliation(self, person_id: int, org_id: int, role_title: str, **optional) -> Optional[int]:
         """
-        Insert affiliation linking person to organization
+        Insert affiliation linking person to organization.
+        If affiliation already exists, returns existing affiliation_id without creating duplicate.
         
         Args:
             person_id: ID of person entity
@@ -1299,9 +1396,14 @@ class DatabaseConnection:
             **optional: Optional fields (symbol_alias_id, valid_from, valid_to, source, confidence)
             
         Returns:
-            int: affiliation_id of inserted affiliation
+            int: affiliation_id of inserted or existing affiliation, None if error
         """
         try:
+            # Check if affiliation already exists
+            existing = self.get_affiliation(person_id, org_id, role_title)
+            if existing:
+                return existing['affiliation_id']
+            
             with self.get_cursor() as cursor:
                 # Default values
                 defaults = {
@@ -1328,8 +1430,37 @@ class DatabaseConnection:
                 return affiliation_id
                 
         except Exception as e:
-            print(f"Ошибка при вставке affiliation: {e}")
-            raise
+            # Don't print error for UNIQUE constraint violations (duplicate affiliations)
+            error_str = str(e)
+            if 'UNIQUE constraint' not in error_str and 'constraint failed' not in error_str:
+                print(f"Ошибка при вставке affiliation: {e}")
+            return None
+    
+    def get_affiliation(self, person_id: int, org_id: int, role_title: str) -> Optional[dict]:
+        """
+        Check if affiliation already exists
+        
+        Args:
+            person_id: ID of person entity
+            org_id: ID of organization entity
+            role_title: Role/title
+            
+        Returns:
+            dict: Affiliation row as dict or None if not found
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM affiliations 
+                    WHERE person_id = ? AND org_id = ? AND role_title = ?
+                """, (person_id, org_id, role_title))
+                
+                row = cursor.fetchone()
+                return dict(row) if row else None
+                
+        except Exception as e:
+            print(f"Ошибка при поиске affiliation: {e}")
+            return None
     
     def get_entity_by_canonical(self, entity_type: Literal['org', 'person'], canonical_full: Optional[str] = None, 
                                given: Optional[str] = None, family: Optional[str] = None) -> Optional[dict]:
@@ -1399,7 +1530,30 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при поиске entity по символу {symbol}: {e}")
             return None
-    
+
+
+    def find_entity_by_id(self, entity_id: int) -> Optional[dict]:
+        """
+        Find an entity by its unique entity_id.
+
+        Args:
+            entity_id: The unique ID of the entity.
+
+        Returns:
+            dict: The entity as a dictionary, or None if not found.
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM entities WHERE entity_id = ?
+                """, (entity_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            print(f"Ошибка при поиске entity по entity_id {entity_id}: {e}")
+            return None
+
+            
     def find_entity_by_alias(self, alias_text: str, fuzzy: bool = False) -> list[dict]:
         """
         Search entities by any alias text

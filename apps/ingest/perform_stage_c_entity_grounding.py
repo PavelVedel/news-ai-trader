@@ -31,12 +31,12 @@ def main():
     found_entities: dict[str, dict] = dict()
     not_found_entities: set[str] = dict()
     
-    total_news = get_total_news_count(db)
+    total_news = db.get_total_news_analysis_a()
 
     print("Starting analysis...")
     tic = time.time()
     
-    for i_news, parsed_row in enumerate(iterate_parsed_news_analysis(db), start=1):
+    for i_news, parsed_row in enumerate(db.iterate_news_analysis_a(), start=1):
         if i_news % 100 == 0:
             print(f"Done {i_news} news ...")
         # print(parsed_row)
@@ -134,83 +134,6 @@ def main():
 
     print("=" * 60 + "\n")
 
-def iterate_parsed_news_analysis(db: DatabaseConnection):
-    """
-    Generator for lazy iteration over parsed data
-    """
-    with db.get_cursor() as cursor:
-        cursor.execute("SELECT * FROM news_analysis_a ORDER BY analyzed_at DESC")
-        
-        for row in cursor:
-            yield parse_news_analysis_row(dict(row))
-
-def get_total_news_count(db: DatabaseConnection) -> int:
-    """Получить общее количество новостей в news_analysis_a"""
-    with db.get_cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM news_analysis_a")
-        return cursor.fetchone()[0]
-
-def parse_news_analysis_row(row: dict[str, Any]) -> dict[str, Any]:
-    """
-    Parses a row from news_analysis_a into typed Python objects
-    """
-    parsed = {}
-    
-    # Simple fields
-    parsed['news_id'] = int(row['news_id'])
-    parsed['headline'] = str(row['headline'])
-    parsed['is_news_grounded'] = bool(row['is_news_grounded'])
-    
-    # JSON fields with typing
-    json_fields = {
-        'symbols_input': list[str],
-        'actors': list[dict[str, Any]],
-        'event': dict[str, Any],
-        'symbol_mentions_in_text': list[dict[str, Any]],
-        'symbol_not_mentioned_in_text': list[str],
-        'unresolved_entities': list[dict[str, Any]]
-    }
-    
-    for field, expected_type in json_fields.items():
-        if row.get(field):
-            try:
-                parsed[field] = json.loads(row[field])
-                # Get base type from parameterized type
-                base_type = get_origin(expected_type) or expected_type
-                if not isinstance(parsed[field], base_type):
-                    print(f"Warning: {field} expected {base_type}, got {type(parsed[field])}")
-            except json.JSONDecodeError as e:
-                print(f"JSON decode error for {field}: {e}")
-                parsed[field] = None
-        else:
-            parsed[field] = [] if expected_type == list else {}
-    
-    # Datetime fields
-    for field in ['created_at_utc', 'analyzed_at']:
-        if row.get(field):
-            parsed[field] = parse_datetime(row[field])
-        else:
-            parsed[field] = None
-    
-    return parsed
-
-def parse_datetime(date_str: str) -> Optional[datetime]:
-    """Parses various date formats"""
-    if not date_str:
-        return None
-        
-    try:
-        # ISO format with Z
-        if date_str.endswith('Z'):
-            return datetime.fromisoformat(date_str[:-1] + '+00:00')
-        # ISO format without timezone
-        elif 'T' in date_str:
-            return datetime.fromisoformat(date_str)
-        # SQLite datetime format
-        else:
-            return datetime.fromisoformat(date_str)
-    except ValueError:
-        return None
 
 if __name__ == "__main__":
     main()

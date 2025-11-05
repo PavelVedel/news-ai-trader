@@ -222,10 +222,10 @@ def populate_entities_from_infos(limit: int = None) -> Dict[str, Any]:
             infos_list = infos_list[:limit]
         print(f"Processing {len(infos_list)} infos records...")
         
-        for info in infos_list:
+        for i_info, info in enumerate(infos_list, start=1):
             try:
                 symbol = info['symbol']
-                print(f"Processing {symbol}...")
+                print(f"[{i_info}/{len(infos_list)}={i_info/len(infos_list)*100:.2f}%] Processing {symbol}...")
                 
                 # Process organization
                 org_entity_id = _process_organization(db, info, stats)
@@ -234,7 +234,7 @@ def populate_entities_from_infos(limit: int = None) -> Dict[str, Any]:
                 
                 # Process officers
                 _process_officers(db, info, org_entity_id, stats)
-                
+                pass
             except Exception as e:
                 error_msg = f"Error processing {info.get('symbol', 'unknown')}: {str(e)}"
                 print(error_msg)
@@ -275,34 +275,36 @@ def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: D
         # Check if org already exists
         existing = db.get_entity_by_canonical('org', canonical_full=canonical_full)
         if existing:
-            raise Exception(f"Organization already exists: {canonical_full}")
-        
-        # Prepare org fields
-        org_fields = {
-            'canonical_full': canonical_full,
-            'display_name': info.get('display_name') or info.get('short_name') or symbol,
-            'long_business_summary': info.get('long_business_summary'),
-            'website': info.get('website'),
-            'ir_website': info.get('ir_website'),
-            'phone': info.get('phone'),
-            'address1': info.get('address1'),
-            'city': info.get('city'),
-            'state': info.get('state'),
-            'zip': info.get('zip'),
-            'country': info.get('country'),
-            'sector': info.get('sector'),
-            'industry': info.get('industry'),
-            'full_time_employees': info.get('full_time_employees')
-        }
-        
-        # Remove None values
-        org_fields = {k: v for k, v in org_fields.items() if v is not None}
-        
-        # Insert organization
-        org_entity_id = db.insert_entity('org', **org_fields)
-        stats['orgs_created'] += 1
+            org_entity_id = existing['entity_id']
+            print(f"Organization {symbol} already exists, using entity_id {org_entity_id}")
+        else:
+            # Prepare org fields
+            org_fields = {
+                'canonical_full': canonical_full,
+                'display_name': info.get('display_name') or info.get('short_name') or symbol,
+                'long_business_summary': info.get('long_business_summary'),
+                'website': info.get('website'),
+                'ir_website': info.get('ir_website'),
+                'phone': info.get('phone'),
+                'address1': info.get('address1'),
+                'city': info.get('city'),
+                'state': info.get('state'),
+                'zip': info.get('zip'),
+                'country': info.get('country'),
+                'sector': info.get('sector'),
+                'industry': info.get('industry'),
+                'full_time_employees': info.get('full_time_employees')
+            }
+            
+            # Remove None values
+            org_fields = {k: v for k, v in org_fields.items() if v is not None}
+            
+            # Insert organization
+            org_entity_id = db.insert_entity('org', **org_fields)
+            stats['orgs_created'] += 1
         
         # Create aliases - only create if the alias text exists and is different from canonical_full
+        # This will also create aliases for existing organizations (in case they're missing)
         aliases_to_create = [
             ('symbol', symbol, symbol.lower(), {'is_primary': 1}),
             ('long_name', info.get('long_name'), normalize_text(info.get('long_name', '')), {}),
@@ -312,8 +314,12 @@ def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: D
         
         for alias_type, alias_text, normalized, extra_params in aliases_to_create:
             if alias_text and alias_text != canonical_full:  # Avoid duplicate aliases
-                db.insert_alias(org_entity_id, alias_text, alias_type, normalized, **extra_params)
-                stats['aliases_created'] += 1
+                try:
+                    db.insert_alias(org_entity_id, alias_text, alias_type, normalized, **extra_params)
+                    stats['aliases_created'] += 1
+                except Exception as e:
+                    # Skip if alias already exists (duplicate)
+                    pass
         
         return org_entity_id
         
@@ -383,9 +389,33 @@ def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_i
                     person_entity_id = db.insert_entity('person', **person_fields)
                     stats['persons_created'] += 1
                 
-                # Create affiliation
-                db.insert_affiliation(person_entity_id, org_entity_id, title)
-                stats['affiliations_created'] += 1
+                # Create aliases for person - only create if the alias text exists and is different
+                display_name = f"{given} {family}"
+                aliases_to_create = [
+                    ('canonical_full', name, normalize_text(name), {}),
+                    ('display_name', display_name, normalize_text(display_name), {}),
+                ]
+                
+                # Add normalized name alias if it's different from display_name
+                if normalized_name and normalized_name != display_name:
+                    aliases_to_create.append(
+                        ('full_norm_no_honor', normalized_name, normalize_text(normalized_name), {})
+                    )
+                
+                for alias_type, alias_text, normalized, extra_params in aliases_to_create:
+                    if alias_text and alias_text.strip():
+                        try:
+                            db.insert_alias(person_entity_id, alias_text, alias_type, normalized, **extra_params)
+                            stats['aliases_created'] += 1
+                            print(f"Added alias for officer: person_entity_id='{person_entity_id}', alias_text='{alias_text}', alias_type='{alias_type}', normalized='{normalized}'")
+                        except Exception as e:
+                            # Skip if alias already exists (duplicate)
+                            pass
+                
+                # Create affiliation (will return existing if duplicate)
+                affiliation_id = db.insert_affiliation(person_entity_id, org_entity_id, title)
+                if affiliation_id:
+                    stats['affiliations_created'] += 1
                 
             except Exception as e:
                 print(f"Error processing officer {officer.get('name', 'unknown')}: {str(e)}")
@@ -409,4 +439,5 @@ if __name__ == "__main__":
     elif args.extract:
         populate_entities_from_infos()
     else:
+        # populate_entities_from_infos()
         print("Use --test to run normalization tests or --extract to populate entities")

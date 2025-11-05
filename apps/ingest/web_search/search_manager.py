@@ -56,7 +56,7 @@ class WebSearchManager:
             force_refresh: If True, bypass cache and search fresh
             fuzzy: If True, use fuzzy matching when checking cache
             entity_type: Type of entity (e.g., 'symbol', 'person', 'company')
-            
+
         Returns:
             {
                 'query': original query,
@@ -261,7 +261,7 @@ class WebSearchManager:
                 WHERE provider = ? AND backoff_until_utc IS NULL
             """, (backoff_until, provider))
     
-    def check_backoff_status(self):
+    def check_backoff_status(self, silence: bool = False):
         """Check which providers are in backoff"""
         providers = ['wikipedia', 'wikidata', 'duckduckgo', 'google_cse']
         in_backoff = []
@@ -292,7 +292,8 @@ class WebSearchManager:
             for provider, until, remaining_mins in in_backoff:
                 print(f"  - {provider}: until {until} ({remaining_mins:.1f} min remaining)")
         else:
-            print("\n✓ No providers in backoff")
+            if not silence:
+                print("\n✓ No providers in backoff")
         
         return in_backoff
     
