@@ -21,9 +21,9 @@ class DatabaseConnection:
             self._connection = sqlite3.connect(self.db_path, timeout=30)
             self._connection.row_factory = sqlite3.Row  # Для удобного доступа к колонкам
             
-            self._connection.execute("PRAGMA journal_mode=WAL;")
-            self._connection.execute("PRAGMA synchronous=NORMAL;")
-            self._connection.execute("PRAGMA busy_timeout=30000;")  # 30 секунд
+            # self._connection.execute("PRAGMA journal_mode=WAL;")
+            # self._connection.execute("PRAGMA synchronous=NORMAL;")
+            # self._connection.execute("PRAGMA busy_timeout=30000;")  # 30 секунд
             # self._connection.execute("PRAGMA foreign_keys=ON;")
         return self._connection
     
@@ -83,13 +83,14 @@ class DatabaseConnection:
             print(f"Ошибка при создании базы данных: {e}")
             return False
 
-    def add_raw_news(self, news_data: dict) -> Optional[int]:
+    def add_raw_news(self, news_data: dict, verbose: bool = True) -> Optional[int]:
         """
         Добавить сырую новость в базу данных
         
         Args:
             news_data: Словарь с данными новости (например от Benziga)
-            
+            verbose: Если False, не выводит сообщения в консоль
+
         Returns:
             news_id: ID добавленной новости (inserted_id) или None при ошибке 
         """
@@ -105,7 +106,8 @@ class DatabaseConnection:
             
             # Проверяем обязательные поля
             if not headline or not created_at_utc:
-                print("Ошибка: отсутствуют обязательные поля headline или created_at")
+                if verbose:
+                    print("Ошибка: отсутствуют обязательные поля headline или created_at")
                 return None
             
             # Парсим время и округляем до минуты для дедупликации
@@ -133,7 +135,8 @@ class DatabaseConnection:
                 """, (hash_dedupe,))
                 
                 if cursor.fetchone():
-                    print(f"Новость уже существует (hash: {hash_dedupe})")
+                    if verbose:
+                        print(f"Новость уже существует (hash: {hash_dedupe})")
                     return None
                 
                 # Вставляем новость
@@ -149,27 +152,29 @@ class DatabaseConnection:
                 
                 # Получаем ID вставленной записи
                 inserted_id = cursor.lastrowid
-                print(f"Новость добавлена с ID: {inserted_id}")
+                if verbose:
+                    print(f"Новость добавлена с ID: {inserted_id}")
                 return inserted_id
                 
         except Exception as e:
             print(f"Ошибка при добавлении новости: {e}")
             return None
     
-    def add_raw_news_batch(self, news_list: list) -> list[int]:
+    def add_raw_news_batch(self, news_list: list, verbose: bool = True) -> list[int]:
         """
         Добавить несколько новостей пакетом
         
         Args:
             news_list: Список словарей с данными новостей
-            
+            verbose: Если False, не выводит сообщения в консоль
+
         Returns:
             list: Список ID добавленных новостей
         """
         added_ids = []
         
         for news_data in news_list:
-            news_id = self.add_raw_news(news_data)
+            news_id = self.add_raw_news(news_data, verbose)
             if news_id:
                 added_ids.append(news_id)
         
@@ -244,12 +249,12 @@ class DatabaseConnection:
             print(f"Ошибка при получении новостей за период: {e}")
             return []
 
-    def get_all_symbols(self) -> list[str]:
+    def get_all_symbols(self, filter_strange: bool = False) -> list[str]:
         """
-        Получить все уникальные символы из базы данных
+        Get list of sorted symbols.
         
         Returns:
-            list[str]: Список уникальных символов (тикеров)
+            list[str]: Sorted list of unique symbols (tickers)
         """
         try:
             with self.get_cursor() as cursor:
@@ -269,7 +274,14 @@ class DatabaseConnection:
                         continue
                 
                 # Сортируем символы для удобства
-                return sorted(list(all_symbols))
+                sorted_list = sorted(list(all_symbols))
+
+                if filter_strange:
+                        sorted_list = [
+                            s for s in sorted_list 
+                            if s and not (s.startswith('$') or ':' in s or '/' in s)
+                        ]
+                return sorted_list
                 
         except Exception as e:
             print(f"Ошибка при получении символов: {e}")
@@ -764,8 +776,11 @@ class DatabaseConnection:
                 
                 for symbol in all_symbols:
                     clean_symbol = symbol.replace('$', '')
-                    if not clean_symbol or len(clean_symbol) > 10:
+                    if not clean_symbol:
                         continue
+                    if ':' in clean_symbol or '/' in clean_symbol:
+                        continue
+
                         
                     if clean_symbol not in existing_fundamentals:
                         # Новый символ - добавляем в список обновления
@@ -1233,12 +1248,22 @@ class DatabaseConnection:
         except ValueError:
             return None
 
-    def iterate_news_analysis_a(self):
+    def iterate_news_analysis_a(self, skip_grounded: bool = True):
         """
         Generator for lazy iteration over parsed data
+        
+        Args:
+            skip_grounded: If True, skip news where is_news_grounded = 1 (default: True)
         """
         with self.get_cursor() as cursor:
-            cursor.execute("SELECT * FROM news_analysis_a ORDER BY analyzed_at DESC")
+            if skip_grounded:
+                cursor.execute("""
+                    SELECT * FROM news_analysis_a 
+                    WHERE is_news_grounded = 0 
+                    ORDER BY analyzed_at DESC
+                """)
+            else:
+                cursor.execute("SELECT * FROM news_analysis_a ORDER BY analyzed_at DESC")
             for row in cursor:
                 yield DatabaseConnection.parse_news_analysis_a_row(dict(row))
 
@@ -1384,6 +1409,39 @@ class DatabaseConnection:
                 print(f"Ошибка при вставке alias: {e}")
             raise
     
+    def insert_aliases(self, aliases_list: List[tuple]) -> int:
+        """
+        Batch insert aliases into aliases table.
+        
+        Args:
+            aliases_list: List of tuples, each containing:
+                (entity_id, alias_text, alias_type, normalized, lang, script, source, confidence, primary_exchange, is_primary)
+                Optional fields can be None.
+                
+        Returns:
+            int: Number of aliases successfully inserted (excluding duplicates)
+        """
+        if not aliases_list:
+            return 0
+        
+        try:
+            with self.get_cursor() as cursor:
+                # Use INSERT OR IGNORE to skip duplicates silently
+                cursor.executemany("""
+                    INSERT OR IGNORE INTO aliases (
+                        entity_id, alias_text, alias_type, normalized,
+                        lang, script, source, confidence, primary_exchange, is_primary
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, aliases_list)
+                
+                return cursor.rowcount
+                
+        except Exception as e:
+            error_str = str(e)
+            if 'UNIQUE constraint' not in error_str and 'constraint failed' not in error_str:
+                print(f"Error in batch insert aliases: {e}")
+            return 0
+    
     def insert_affiliation(self, person_id: int, org_id: int, role_title: str, **optional) -> Optional[int]:
         """
         Insert affiliation linking person to organization.
@@ -1501,6 +1559,30 @@ class DatabaseConnection:
         except Exception as e:
             print(f"Ошибка при поиске entity: {e}")
             return None
+    
+    def get_all_entities_by_type(self, entity_type: Literal['org', 'person']) -> List[dict]:
+        """
+        Get all entities of a specific type for caching purposes
+        
+        Args:
+            entity_type: 'org' or 'person'
+            
+        Returns:
+            List[dict]: List of all entities of the specified type
+        """
+        try:
+            with self.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM entities 
+                    WHERE entity_type = ?
+                """, (entity_type,))
+                
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            print(f"Ошибка при получении всех entities типа {entity_type}: {e}")
+            return []
 
     # =========================================================
     # SEARCH METHODS FOR NEWS ANALYSIS

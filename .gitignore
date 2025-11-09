@@ -196,3 +196,5 @@ example_news.db
 *.parquet
 anomaly_analysis_results.json
 
+# Promts
+data/prompts/*

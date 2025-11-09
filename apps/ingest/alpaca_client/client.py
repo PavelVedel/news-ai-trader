@@ -28,7 +28,7 @@ def fetch_news(symbol="AAPL", limit=5):
     items = r.json().get("news", [])
     for it in items:
         # Запишем в лог (JSONL) уже нормализованное событие
-        logger.info("rest_news", extra={"payload": _normalize_news(it)})
+        logger.debug("rest_news", extra={"payload": _normalize_news(it)})
     return items
 
 

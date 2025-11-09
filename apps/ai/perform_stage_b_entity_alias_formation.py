@@ -8,7 +8,7 @@ to create standardized derivatives for matching and grounding purposes.
 import re
 import unicodedata
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -216,30 +216,72 @@ def populate_entities_from_infos(limit: int = None) -> Dict[str, Any]:
             stats['errors'].append("Failed to create entities tables")
             return stats
         
+        # Preload all existing entities into cache for fast lookup
+        print("Loading existing entities into cache...")
+        org_cache = {}  # canonical_full -> entity_id
+        person_cache = {}  # (given, family) -> entity_id
+        
+        all_orgs = db.get_all_entities_by_type('org')
+        for org in all_orgs:
+            canonical_full = org.get('canonical_full')
+            if canonical_full:
+                org_cache[canonical_full] = org['entity_id']
+        
+        all_persons = db.get_all_entities_by_type('person')
+        for person in all_persons:
+            given = person.get('given')
+            family = person.get('family')
+            if given and family:
+                key = (given, family)
+                person_cache[key] = person['entity_id']
+        
+        print(f"Loaded {len(org_cache)} organizations and {len(person_cache)} persons into cache")
+        
         # Get all infos
         infos_list = db.get_all_infos()
         if limit:
             infos_list = infos_list[:limit]
         print(f"Processing {len(infos_list)} infos records...")
         
+        # Collect all aliases for batch insert
+        all_aliases = []
+        BATCH_SIZE = 1000  # Insert aliases every 1000 records
+        
         for i_info, info in enumerate(infos_list, start=1):
             try:
                 symbol = info['symbol']
-                print(f"[{i_info}/{len(infos_list)}={i_info/len(infos_list)*100:.2f}%] Processing {symbol}...")
+                print(f"[{i_info}/{len(infos_list)}|{i_info/len(infos_list)*100:.2f}%] Processing {symbol}...")
                 
-                # Process organization
-                org_entity_id = _process_organization(db, info, stats)
+                # Process organization (returns org_entity_id and aliases_list)
+                org_entity_id, org_aliases = _process_organization(db, info, stats, org_cache)
                 if org_entity_id is None:
                     continue
                 
-                # Process officers
-                _process_officers(db, info, org_entity_id, stats)
-                pass
+                # Add organization aliases to batch
+                all_aliases.extend(org_aliases)
+                
+                # Process officers (returns aliases_list)
+                officer_aliases = _process_officers(db, info, org_entity_id, stats, person_cache)
+                all_aliases.extend(officer_aliases)
+                
+                # Batch insert aliases periodically to avoid memory issues
+                if len(all_aliases) >= BATCH_SIZE:
+                    inserted_count = db.insert_aliases(all_aliases)
+                    stats['aliases_created'] += inserted_count
+                    print(f"  Inserted {inserted_count} aliases (batch)")
+                    all_aliases = []
+                    
             except Exception as e:
                 error_msg = f"Error processing {info.get('symbol', 'unknown')}: {str(e)}"
                 print(error_msg)
                 stats['errors'].append(error_msg)
                 continue
+        
+        # Insert remaining aliases
+        if all_aliases:
+            inserted_count = db.insert_aliases(all_aliases)
+            stats['aliases_created'] += inserted_count
+            print(f"  Inserted {inserted_count} aliases (final batch)")
         
         print(f"\nProcessing complete!")
         print(f"Organizations created: {stats['orgs_created']}")
@@ -257,8 +299,19 @@ def populate_entities_from_infos(limit: int = None) -> Dict[str, Any]:
         return stats
 
 
-def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: Dict[str, Any]) -> Optional[int]:
-    """Process organization from info record"""
+def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: Dict[str, Any], org_cache: Dict[str, int]) -> Tuple[Optional[int], List[tuple]]:
+    """
+    Process organization from info record
+    
+    Args:
+        db: Database connection
+        info: Info record dict
+        stats: Statistics dict
+        org_cache: Cache dict mapping canonical_full -> entity_id
+        
+    Returns:
+        tuple: (org_entity_id, aliases_list) where aliases_list contains tuples for batch insert
+    """
     try:
         symbol = info['symbol']
         
@@ -270,13 +323,13 @@ def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: D
         
         if not canonical_full:
             print(f"Warning: {symbol} has no name fields, skipping")
-            return None
+            return None, []
         
-        # Check if org already exists
-        existing = db.get_entity_by_canonical('org', canonical_full=canonical_full)
-        if existing:
-            org_entity_id = existing['entity_id']
-            print(f"Organization {symbol} already exists, using entity_id {org_entity_id}")
+        # Check if org already exists in cache
+        org_entity_id = org_cache.get(canonical_full)
+        if org_entity_id:
+            # Organization exists in cache
+            pass  # No print to reduce output
         else:
             # Prepare org fields
             org_fields = {
@@ -302,9 +355,13 @@ def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: D
             # Insert organization
             org_entity_id = db.insert_entity('org', **org_fields)
             stats['orgs_created'] += 1
+            
+            # Update cache with new organization
+            org_cache[canonical_full] = org_entity_id
         
-        # Create aliases - only create if the alias text exists and is different from canonical_full
+        # Prepare aliases for batch insert - only create if the alias text exists and is different from canonical_full
         # This will also create aliases for existing organizations (in case they're missing)
+        aliases_list = []
         aliases_to_create = [
             ('symbol', symbol, symbol.lower(), {'is_primary': 1}),
             ('long_name', info.get('long_name'), normalize_text(info.get('long_name', '')), {}),
@@ -312,31 +369,75 @@ def _process_organization(db: DatabaseConnection, info: Dict[str, Any], stats: D
             ('display_name', info.get('display_name'), normalize_text(info.get('display_name', '')), {})
         ]
         
+        # Default values for optional fields
+        defaults = {
+            'lang': None,
+            'script': None,
+            'source': 'yahoo_finance',
+            'confidence': 1.0,
+            'primary_exchange': None,
+            'is_primary': 0
+        }
+        
         for alias_type, alias_text, normalized, extra_params in aliases_to_create:
             if alias_text and alias_text != canonical_full:  # Avoid duplicate aliases
-                try:
-                    db.insert_alias(org_entity_id, alias_text, alias_type, normalized, **extra_params)
-                    stats['aliases_created'] += 1
-                except Exception as e:
-                    # Skip if alias already exists (duplicate)
-                    pass
+                # Merge defaults with extra_params
+                params = {**defaults, **extra_params}
+                # Create tuple for batch insert: (entity_id, alias_text, alias_type, normalized, lang, script, source, confidence, primary_exchange, is_primary)
+                alias_tuple = (
+                    org_entity_id,
+                    alias_text,
+                    alias_type,
+                    normalized,
+                    params['lang'],
+                    params['script'],
+                    params['source'],
+                    params['confidence'],
+                    params['primary_exchange'],
+                    params['is_primary']
+                )
+                aliases_list.append(alias_tuple)
         
-        return org_entity_id
+        return org_entity_id, aliases_list
         
     except Exception as e:
         raise Exception(f"Error processing organization {symbol}: {str(e)}")
 
 
-def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_id: int, stats: Dict[str, Any]):
-    """Process officers from officers_json"""
+def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_id: int, stats: Dict[str, Any], person_cache: Dict[Tuple[str, str], int]) -> List[tuple]:
+    """
+    Process officers from officers_json
+    
+    Args:
+        db: Database connection
+        info: Info record dict
+        org_entity_id: Organization entity ID
+        stats: Statistics dict
+        person_cache: Cache dict mapping (given, family) -> entity_id
+    
+    Returns:
+        List[tuple]: List of aliases tuples for batch insert
+    """
+    aliases_list = []
+    
     try:
         officers_json = info.get('officers_json')
         if not officers_json:
-            return
+            return aliases_list
         
         officers = json.loads(officers_json)
         if not isinstance(officers, list):
-            return
+            return aliases_list
+        
+        # Default values for optional fields
+        defaults = {
+            'lang': None,
+            'script': None,
+            'source': 'yahoo_finance',
+            'confidence': 1.0,
+            'primary_exchange': None,
+            'is_primary': 0
+        }
         
         for officer in officers:
             try:
@@ -363,10 +464,12 @@ def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_i
                 family = name_parts[-1]
                 middle = ' '.join(name_parts[1:-1]) if len(name_parts) > 2 else None
                 
-                # Check if person already exists
-                existing = db.get_entity_by_canonical('person', given=given, family=family)
-                if existing:
-                    person_entity_id = existing['entity_id']
+                # Check if person already exists in cache
+                person_key = (given, family)
+                person_entity_id = person_cache.get(person_key)
+                if person_entity_id:
+                    # Person exists in cache
+                    pass
                 else:
                     # Create person entity
                     person_fields = {
@@ -388,8 +491,11 @@ def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_i
                     
                     person_entity_id = db.insert_entity('person', **person_fields)
                     stats['persons_created'] += 1
+                    
+                    # Update cache with new person
+                    person_cache[person_key] = person_entity_id
                 
-                # Create aliases for person - only create if the alias text exists and is different
+                # Prepare aliases for batch insert - only create if the alias text exists and is different
                 display_name = f"{given} {family}"
                 aliases_to_create = [
                     ('canonical_full', name, normalize_text(name), {}),
@@ -404,13 +510,22 @@ def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_i
                 
                 for alias_type, alias_text, normalized, extra_params in aliases_to_create:
                     if alias_text and alias_text.strip():
-                        try:
-                            db.insert_alias(person_entity_id, alias_text, alias_type, normalized, **extra_params)
-                            stats['aliases_created'] += 1
-                            print(f"Added alias for officer: person_entity_id='{person_entity_id}', alias_text='{alias_text}', alias_type='{alias_type}', normalized='{normalized}'")
-                        except Exception as e:
-                            # Skip if alias already exists (duplicate)
-                            pass
+                        # Merge defaults with extra_params
+                        params = {**defaults, **extra_params}
+                        # Create tuple for batch insert: (entity_id, alias_text, alias_type, normalized, lang, script, source, confidence, primary_exchange, is_primary)
+                        alias_tuple = (
+                            person_entity_id,
+                            alias_text,
+                            alias_type,
+                            normalized,
+                            params['lang'],
+                            params['script'],
+                            params['source'],
+                            params['confidence'],
+                            params['primary_exchange'],
+                            params['is_primary']
+                        )
+                        aliases_list.append(alias_tuple)
                 
                 # Create affiliation (will return existing if duplicate)
                 affiliation_id = db.insert_affiliation(person_entity_id, org_entity_id, title)
@@ -420,6 +535,8 @@ def _process_officers(db: DatabaseConnection, info: Dict[str, Any], org_entity_i
             except Exception as e:
                 print(f"Error processing officer {officer.get('name', 'unknown')}: {str(e)}")
                 continue
+        
+        return aliases_list
                 
     except Exception as e:
         raise Exception(f"Error processing officers for {info.get('symbol', 'unknown')}: {str(e)}")
@@ -439,5 +556,5 @@ if __name__ == "__main__":
     elif args.extract:
         populate_entities_from_infos()
     else:
-        # populate_entities_from_infos()
-        print("Use --test to run normalization tests or --extract to populate entities")
+        populate_entities_from_infos()
+        # print("Use --test to run normalization tests or --extract to populate entities")
