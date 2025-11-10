@@ -10,43 +10,43 @@ echo ========================================
 echo.
 
 :: Check that we are in the project root folder
-::if not exist "apps" (
-::    echo [ERROR] Run the script from the project root folder!
-::    echo Current folder: %CD%
-::    echo Expected structure: apps\ingest, apps\market_data
-::    pause
-::    exit /b 1
-::)
-::
-::echo [1/7] Starting news collection...
-::echo ----------------------------------------
-::python apps\ingest\rest_news_collector.py --mode update_all
-::if %errorlevel% neq 0 (
-::    echo [WARNING] Error collecting news (code: %errorlevel%)
-::) else (
-::    echo [OK] News collected successfully
-::)
-::echo.
-::
-::echo [2/7] Starting market data update...
-::echo ----------------------------------------
-::python apps\market_data\update_market_data.py
-::if %errorlevel% neq 0 (
-::    echo [WARNING] Error updating market data (code: %errorlevel%)
-::) else (
-::    echo [OK] Market data updated successfully
-::)
-::echo.
-::
-::echo [3/6] Starting fundamentals and company information update...
-::echo ----------------------------------------
-::python apps\market_data\update_infos_and_fundamentals.py
-::if %errorlevel% neq 0 (
-::    echo [WARNING] Error updating fundamentals and infos (code: %errorlevel%)
-::) else (
-::    echo [OK] Fundamentals and company information updated successfully
-::)
-::echo.
+if not exist "apps" (
+    echo [ERROR] Run the script from the project root folder!
+    echo Current folder: %CD%
+    echo Expected structure: apps\ingest, apps\market_data
+    pause
+    exit /b 1
+)
+
+echo [1/7] Starting news collection...
+echo ----------------------------------------
+python apps\ingest\rest_news_collector.py --mode download_latest
+if %errorlevel% neq 0 (
+    echo [WARNING] Error collecting news (code: %errorlevel%)
+) else (
+    echo [OK] News collected successfully
+)
+echo.
+
+echo [2/7] Starting market data update...
+echo ----------------------------------------
+python apps\market_data\update_market_data.py
+if %errorlevel% neq 0 (
+    echo [WARNING] Error updating market data (code: %errorlevel%)
+) else (
+    echo [OK] Market data updated successfully
+)
+echo.
+
+echo [3/6] Starting fundamentals and company information update...
+echo ----------------------------------------
+python apps\market_data\update_infos_and_fundamentals.py
+if %errorlevel% neq 0 (
+    echo [WARNING] Error updating fundamentals and infos (code: %errorlevel%)
+) else (
+    echo [OK] Fundamentals and company information updated successfully
+)
+echo.
 
 echo [4/6] Starting news analysis (Stage A)...
 echo ----------------------------------------

@@ -1,5 +1,5 @@
 from libs.database.connection import DatabaseConnection
-from apps.ingest.alpaca_client.client import fetch_news
+from apps.ingest.alpaca_client.client import fetch_news, fetch_all_in_interval
 from collections import deque
 import time
 import argparse
@@ -90,8 +90,60 @@ def update_news_for_all_symbols():
         approx_time_left_str = f"{int(approx_time_left // 60):02d}:{int(approx_time_left % 60):02d}"
 
         # Print logs
-        print(f"[{i_symbol}/{len(all_symbols)}:{i_symbol/len(all_symbols)*100:.2f}%] {symbol}: \tfetched {len(news_list)}; \t new news {len(added_news)}\t time left {approx_time_left_str}.")
+        print(f"[{i_symbol}/{len(all_symbols)}:{i_symbol/len(all_symbols)*100:.2f}%] {symbol}: \tfetched {len(news_list)};\t new news {len(added_news)};\t time left {approx_time_left_str}.")
 
+
+def download_the_latest_missed_news(symbol: str = None):
+    """
+    Finds the latest news in the database and requests news updates
+    from that news moment to the current time.
+    
+    Args:
+        symbol: Optional symbol to filter news. If None,
+                all news are requested.
+    """
+    db = DatabaseConnection("data/db/news.db")
+    db.create_database()
+    
+    # Find the latest news in the database
+    try:
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT created_at_utc FROM news_raw 
+                ORDER BY created_at_utc DESC 
+                LIMIT 1
+            """)
+            row = cursor.fetchone()
+            
+            if not row:
+                print("No news in the database. Starting from current date.")
+                # If database is empty, use current date minus 1 day as starting point
+                from datetime import datetime, timezone, timedelta
+                start_date = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace('+00:00', 'Z')
+            else:
+                start_date = row['created_at_utc']
+                # Ensure date format is correct (should end with 'Z')
+                if not start_date.endswith('Z') and '+' not in start_date:
+                    start_date = start_date + 'Z'
+                print(f"Found latest news in database: {start_date}")
+    except Exception as e:
+        print(f"Error while searching for latest news: {e}")
+        return
+    
+    # Request news from the latest news moment to current time
+    print(f"Requesting news from {start_date} to current time...")
+    try:
+        news_list = fetch_all_in_interval(symbol=symbol, start=start_date, end=None)
+        print(f"Received {len(news_list)} news items")
+        
+        # Save news to database
+        if news_list:
+            added_news = db.add_raw_news_batch(news_list, verbose=False)
+            print(f"Added {len(added_news)} new news items out of {len(news_list)} received")
+        else:
+            print("No new news found")
+    except Exception as e:
+        print(f"Error while requesting news: {e}")
 
 
 if __name__ == "__main__":
@@ -101,9 +153,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m", "--mode",
-        choices=["update_all", "recurrent"],
+        choices=["update_all", "recurrent", "download_latest"],
         default="recurrent",
-        help="Mode: 'update_all' - update all symbols, 'recurrent' - recurrently update news for the latest symbols (default: recurrent)"
+        help="Mode: 'update_all' - update all symbols, 'recurrent' - recurrently update news for the latest symbols, 'download_latest' - download missed news since latest in DB (default: recurrent)"
     )
     parser.add_argument(
         "-md", "--max-done",
@@ -117,9 +169,17 @@ if __name__ == "__main__":
         default=NEWS_LIMIT_PER_REQUEST,
         help=f"News limit per request (default: {NEWS_LIMIT_PER_REQUEST})"
     )
+    parser.add_argument(
+        "-s", "--symbol",
+        type=str,
+        default=None,
+        help="Symbol to filter news (only for download_latest mode)"
+    )
     args = parser.parse_args()
 
     if args.mode == "update_all":
         update_news_for_all_symbols()
     elif args.mode == "recurrent":
         requrent_rest_news_connector(max_done=args.max_done)
+    elif args.mode == "download_latest":
+        download_the_latest_missed_news(symbol=args.symbol)

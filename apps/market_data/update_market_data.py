@@ -23,7 +23,7 @@ def main():
     print(f"Updating {FREQ} data for {len(db_symbols)} tickers...")
     
     for i_symbol, symbol in enumerate(db_symbols):
-        print(f"\n[{i_symbol+1}/{len(db_symbols)}] Processing {symbol}...")
+        print(f"\n[{i_symbol+1}/{len(db_symbols)}|{(i_symbol+1)/len(db_symbols)*100:.2f}%] Processing {symbol}...")
         try:
             storage.update_symbol_1m(symbol)
         except Exception as e:

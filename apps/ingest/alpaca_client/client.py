@@ -6,6 +6,7 @@ import websockets
 from dotenv import load_dotenv
 from typing import Iterable, Any
 from libs.utils.logging_setup import get_logger
+from typing import Optional
 
 load_dotenv()  # загружает .env в os.environ
 logger = get_logger("news.alpaca")
@@ -15,9 +16,42 @@ ALPACA_SECRET = os.getenv("ALPACA_API_SECRET")
 # https://docs.alpaca.markets/docs/real-time-stock-pricing-data
 REST_URL = "https://data.alpaca.markets/v1beta1/news"
 WS_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
+MAX_NEWS_PER_REQUEST = 50
+
+def fetch_all_in_interval(symbol:Optional[str]=None, start="2025-11-10T00:00:00Z", end=None):
+    headers = {"Apca-Api-Key-Id": ALPACA_KEY, "Apca-Api-Secret-Key": ALPACA_SECRET}
+    token = None
+    items_all = []
+    itteration = 0
+    while True:
+        itteration += 1
+        params = {
+            "symbols": symbol,
+            "limit": MAX_NEWS_PER_REQUEST,               # max
+            "start": start,
+            "sort": "asc",
+        }
+        if end:
+            params["end"] = end
+        if token:
+            params["page_token"] = token
+
+        r = requests.get(REST_URL, params=params, headers=headers, timeout=30)
+        r.raise_for_status()
+        payload = r.json()
+        # print(payload)
+        print(f"[{itteration}] Get {len(payload['news'])} news from {payload['news'][0]['created_at']} to {payload['news'][-1]['created_at']}")
+        items = payload.get("news", [])
+        items_all.extend(items)
+
+        token = payload.get("next_page_token")
+        if not token:
+            break
+
+    return items_all
 
 
-def fetch_news(symbol="AAPL", limit=5):
+def fetch_news(symbol: str = "AAPL", limit: int = MAX_NEWS_PER_REQUEST):
     """Простой REST-запрос новостей по тикеру. Symbol может быть None."""
     headers = {"Apca-Api-Key-Id": ALPACA_KEY, "Apca-Api-Secret-Key": ALPACA_SECRET}
     params = {"limit": limit}
@@ -92,3 +126,11 @@ async def stream_news_iter(symbols: Iterable[str], normalize: bool = True):
                 item = _normalize_news(ev) if normalize else ev
                 logger.info("ws_news", extra={"payload": item})  # <— лог в JSONL/консоль
                 yield item
+
+
+if __name__ == "__main__":
+    print("Starting fetching news ... ")
+    n = fetch_all_in_interval()
+
+    n1 = fetch_news()
+    pass
