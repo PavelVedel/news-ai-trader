@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import pandas as pd
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import pyarrow
 import time
 
@@ -64,9 +64,18 @@ class MarketDataStorage:
             merged = chunk.sort_index()
         self._safe_write_parquet(merged, p)
 
-    def update_symbol_1m(self, symbol: str):
+    def update_symbol_1m(self, symbol: str, refresh_current_day: bool = False):
         if self.client is None:
             raise RuntimeError("YahooFinanceClient not provided")
+        
+        # Check if today's parquet file already exists (unless refresh_current_day is True)
+        if not refresh_current_day:
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_path = self.get_day_path(symbol, today)
+            if today_path.exists():
+                print(f"Пропуск {symbol}: файл за сегодня уже существует ({today_path.name})")
+                return
+        
         tic = time.time()
         df = self.client.get_1m_candles(symbol, period="7d")
         dt_get_data = time.time() - tic
@@ -74,10 +83,13 @@ class MarketDataStorage:
         if df.empty:
             print(f"Нет данных для {symbol} ({dt_get_data:.2f}s)")
             return
-        for day, chunk in self.split_by_calendar_day(df).items():
+        days_dict = self.split_by_calendar_day(df)
+        for day, chunk in days_dict.items():
             self.merge_save_day(symbol, day, chunk)
         dt_write_data = time.time() - tic
-        print(f"Обновлено {len(self.split_by_calendar_day(df))} дней для {symbol} ({dt_get_data:.2f}s | {dt_write_data:.2f}s)")
+        last_day = max(days_dict.keys()) if days_dict else None
+        last_day_str = last_day.strftime("%Y-%m-%d") if last_day else "N/A"
+        print(f"Обновлено {len(days_dict)} дней для {symbol} ({dt_get_data:.2f}s | {dt_write_data:.2f}s), последний день: {last_day_str}")
 
     def get_stored_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start = pd.to_datetime(start_date)
