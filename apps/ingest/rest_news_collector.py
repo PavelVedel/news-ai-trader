@@ -93,7 +93,7 @@ def update_news_for_all_symbols():
         print(f"[{i_symbol}/{len(all_symbols)}:{i_symbol/len(all_symbols)*100:.2f}%] {symbol}: \tfetched {len(news_list)};\t new news {len(added_news)};\t time left {approx_time_left_str}.")
 
 
-def download_the_latest_missed_news(symbol: str = None):
+def download_the_latest_missed_news(symbol: str = None, from_day: str = None):
     """
     Finds the latest news in the database and requests news updates
     from that news moment to the current time.
@@ -101,34 +101,49 @@ def download_the_latest_missed_news(symbol: str = None):
     Args:
         symbol: Optional symbol to filter news. If None,
                 all news are requested.
+        from_day: Optional date string in format "YYYY-MM-DD" (e.g., "2025-08-15").
+                  If provided, downloads news from this date. If None, uses the latest
+                  news date from the database.
     """
     db = DatabaseConnection("data/db/news.db")
     db.create_database()
     
-    # Find the latest news in the database
-    try:
-        with db.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT created_at_utc FROM news_raw 
-                ORDER BY created_at_utc DESC 
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-            
-            if not row:
-                print("No news in the database. Starting from current date.")
-                # If database is empty, use current date minus 1 day as starting point
-                from datetime import datetime, timezone, timedelta
-                start_date = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace('+00:00', 'Z')
-            else:
-                start_date = row['created_at_utc']
-                # Ensure date format is correct (should end with 'Z')
-                if not start_date.endswith('Z') and '+' not in start_date:
-                    start_date = start_date + 'Z'
-                print(f"Found latest news in database: {start_date}")
-    except Exception as e:
-        print(f"Error while searching for latest news: {e}")
-        return
+    # If from_day is specified, use it as start_date
+    if from_day:
+        from datetime import datetime, timezone
+        try:
+            # Parse the date string and convert to ISO format with 'Z'
+            date_obj = datetime.strptime(from_day, "%Y-%m-%d")
+            start_date = date_obj.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+            print(f"Using specified start date: {start_date}")
+        except ValueError as e:
+            print(f"Error parsing from_day '{from_day}': {e}. Expected format: YYYY-MM-DD")
+            return
+    else:
+        # Find the latest news in the database
+        try:
+            with db.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT created_at_utc FROM news_raw 
+                    ORDER BY created_at_utc DESC 
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                
+                if not row:
+                    print("No news in the database. Starting from current date.")
+                    # If database is empty, use current date minus 1 day as starting point
+                    from datetime import datetime, timezone, timedelta
+                    start_date = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace('+00:00', 'Z')
+                else:
+                    start_date = row['created_at_utc']
+                    # Ensure date format is correct (should end with 'Z')
+                    if not start_date.endswith('Z') and '+' not in start_date:
+                        start_date = start_date + 'Z'
+                    print(f"Found latest news in database: {start_date}")
+        except Exception as e:
+            print(f"Error while searching for latest news: {e}")
+            return
     
     # Request news from the latest news moment to current time
     print(f"Requesting news from {start_date} to current time...")
@@ -175,6 +190,12 @@ if __name__ == "__main__":
         default=None,
         help="Symbol to filter news (only for download_latest mode)"
     )
+    parser.add_argument(
+        "-d", "--from-day",
+        type=str,
+        default=None,
+        help="Start date for downloading news in format YYYY-MM-DD (e.g., 2025-08-15). Only for download_latest mode. If not specified, uses latest news date from database."
+    )
     args = parser.parse_args()
 
     if args.mode == "update_all":
@@ -182,4 +203,4 @@ if __name__ == "__main__":
     elif args.mode == "recurrent":
         requrent_rest_news_connector(max_done=args.max_done)
     elif args.mode == "download_latest":
-        download_the_latest_missed_news(symbol=args.symbol)
+        download_the_latest_missed_news(symbol=args.symbol, from_day=args.from_day)

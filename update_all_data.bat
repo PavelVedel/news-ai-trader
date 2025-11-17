@@ -85,5 +85,5 @@ echo.
 echo All scripts executed. Check logs for details.
 echo.
 
-goto x
+:: goto x
 pause

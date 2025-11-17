@@ -8,7 +8,7 @@ import pandas as pd
 from typing import Dict, Optional
 from datetime import datetime
 import pyarrow
-
+import time
 
 class MarketDataStorage:
     def __init__(self, base_path: str = "data_yahoo", freq: str = "1m", client=None):
@@ -67,13 +67,17 @@ class MarketDataStorage:
     def update_symbol_1m(self, symbol: str):
         if self.client is None:
             raise RuntimeError("YahooFinanceClient not provided")
+        tic = time.time()
         df = self.client.get_1m_candles(symbol, period="7d")
+        dt_get_data = time.time() - tic
+        tic = time.time()
         if df.empty:
-            print(f"Нет данных для {symbol}")
+            print(f"Нет данных для {symbol} ({dt_get_data:.2f}s)")
             return
         for day, chunk in self.split_by_calendar_day(df).items():
             self.merge_save_day(symbol, day, chunk)
-        print(f"Обновлено {len(self.split_by_calendar_day(df))} дней для {symbol}")
+        dt_write_data = time.time() - tic
+        print(f"Обновлено {len(self.split_by_calendar_day(df))} дней для {symbol} ({dt_get_data:.2f}s | {dt_write_data:.2f}s)")
 
     def get_stored_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start = pd.to_datetime(start_date)
